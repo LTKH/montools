@@ -41,7 +41,7 @@ func newHttpClient() *HttpClient {
                 IdleConnTimeout:     90 * time.Second,
                 DisableCompression:  false,
             },
-            Timeout: 5 * time.Second,
+            Timeout: 30 * time.Second,
         },
     }
     return client
