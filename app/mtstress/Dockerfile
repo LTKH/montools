@@ -2,7 +2,7 @@ FROM golang:1.17 AS builder
 
 COPY . /src/
 WORKDIR /src/
-RUN go build -o /bin/mtstress app/mtstress/main.go
+RUN go build -o /bin/mtstress main.go
 
 FROM alpine:3.15.0
 
