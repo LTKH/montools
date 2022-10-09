@@ -74,7 +74,7 @@ func main() {
 
             clnt := newHttpClient()
 
-            for {
+            for i := 0; i < 300; i++ {
                 time.Sleep(time.Duration(*interval) * time.Second)
 
                 var buf bytes.Buffer
@@ -121,8 +121,8 @@ func main() {
 
     log.Print("[info] mtstress started")
 
-    
-
 	// Daemon mode
-    time.Sleep(300 * time.Second)
+    for {
+        time.Sleep(300 * time.Second)
+    }
 }
