@@ -1,4 +1,4 @@
-module github.com/ltkh/mtools
+module github.com/ltkh/montools
 
 go 1.17
 
