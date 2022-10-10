@@ -1,3 +1,4 @@
+ARG app_name
 FROM golang:1.17 AS builder
 
 COPY . /src/
