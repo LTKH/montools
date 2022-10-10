@@ -1,14 +1,14 @@
-ENV APP_NAME=mtesting
 FROM golang:1.17 AS builder
+ARG app_name
 
 COPY . /src/
 WORKDIR /src/
-RUN echo "test - ${APP_NAME}"
-RUN go build -o /bin/${APP_NAME} app/${APP_NAME}/main.go
+RUN go build -o /bin/${app_name} app/${app_name}/main.go
 
 FROM alpine:3.15.0
+ARG app_name
 
-COPY --from=builder /bin/${APP_NAME} /bin/${APP_NAME}
+COPY --from=builder /bin/${app_name} /bin/${app_name}
 
-ENTRYPOINT ["/bin/${APP_NAME}"]
+ENTRYPOINT ["/bin/${app_name}"]
 CMD [""]
