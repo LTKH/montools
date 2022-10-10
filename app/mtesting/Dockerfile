@@ -2,7 +2,7 @@ FROM golang:1.17 AS builder
 
 COPY . /src/
 WORKDIR /src/
-RUN pwd 
+RUN ls -l
 RUN go get github.com/gorilla/websocket 
 RUN go build -o /bin/mtesting main.go
 
