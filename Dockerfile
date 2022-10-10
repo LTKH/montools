@@ -1,4 +1,4 @@
-ARG app_name
+ARG app_name=mtesting
 FROM golang:1.17 AS builder
 
 COPY . /src/
