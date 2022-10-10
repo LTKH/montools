@@ -1,10 +1,10 @@
 FROM golang:1.17 AS builder
 
-COPY . /src/
+COPY ../../. /src/
 WORKDIR /src/
 RUN ls -l
 RUN go get github.com/gorilla/websocket 
-RUN go build -o /bin/mtesting main.go
+RUN go build -o /bin/mtesting app/mtesting/main.go
 
 FROM alpine:3.15.0
 
