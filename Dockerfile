@@ -13,6 +13,8 @@ RUN apk update && \
     apk add --no-cache bash curl && \
     apk add --allow-untrusted /tmp/*.apk && rm -f /tmp/*.apk
 
+EXPOSE 8010
+
 COPY --from=builder /bin/${app_name} /bin/mtools
 
 ENTRYPOINT ["/bin/mtools"]
