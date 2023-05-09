@@ -11,6 +11,7 @@ import (
     "log"
     "fmt"
     "bytes"
+    "strings"
 	"net/http"
     "math/rand"
     "sync/atomic"
@@ -78,32 +79,7 @@ func encodeResp(resp *Resp) []byte {
     return jsn
 }
 
-func httpStart(w http.ResponseWriter, r *http.Request) {
-
-    var start Start
-
-    body, err := ioutil.ReadAll(r.Body)
-    if err != nil {
-        log.Printf("[error] %v - %s", err, r.URL.Path)
-        w.WriteHeader(400)
-        w.Write(encodeResp(&Resp{Status:"error", Error:err.Error()}))
-        return
-    }
-
-    if err := json.Unmarshal(body, &start); err != nil {
-        log.Printf("[error] %v - %s", err, r.URL.Path)
-        w.WriteHeader(400)
-        w.Write(encodeResp(&Resp{Status:"error", Error:err.Error()}))
-        return
-    }
-
-    stats = &Data{
-        RequestTotal: 0,
-        RequestSuccess: 0,
-        RequestErrors: 0,
-        PacketSize: start.PacketSize,
-    }
-
+func startTest(start Start) {
     run <- 0
     sdt = time.Now().UTC().Unix()
 
@@ -131,7 +107,7 @@ func httpStart(w http.ResponseWriter, r *http.Request) {
 
                 var buf bytes.Buffer
 
-                data := getMetrics(start.PacketSize)
+                data := getMetrics(stats.PacketSize)
                 
                 writer := gzip.NewWriter(&buf)
                 if _, err := writer.Write(data); err != nil {
@@ -175,6 +151,8 @@ func httpStart(w http.ResponseWriter, r *http.Request) {
                     continue
                 }
 
+                log.Printf("[debug] writing to [%s] received status code: %d", start.WriteUrl, resp.StatusCode)
+
                 atomic.AddUint64(&stats.RequestSuccess, 1)
 
                 time.Sleep(time.Duration(start.Interval) * time.Second)
@@ -185,6 +163,28 @@ func httpStart(w http.ResponseWriter, r *http.Request) {
             clnt.client.CloseIdleConnections()
         }()
     }
+}
+
+func httpStart(w http.ResponseWriter, r *http.Request) {
+
+    var start Start
+
+    body, err := ioutil.ReadAll(r.Body)
+    if err != nil {
+        log.Printf("[error] %v - %s", err, r.URL.Path)
+        w.WriteHeader(400)
+        w.Write(encodeResp(&Resp{Status:"error", Error:err.Error()}))
+        return
+    }
+
+    if err := json.Unmarshal(body, &start); err != nil {
+        log.Printf("[error] %v - %s", err, r.URL.Path)
+        w.WriteHeader(400)
+        w.Write(encodeResp(&Resp{Status:"error", Error:err.Error()}))
+        return
+    }
+
+    startTest(start)
     
     w.WriteHeader(204)
     return
@@ -269,14 +269,41 @@ func newHttpClient() *HttpClient {
 }
 
 func getMetrics(size int) []byte {
-    lines := ""
-    for i := 0; i < size; i++ {
-        lines = lines + fmt.Sprintf("test_metric,location=us-midwest,line=%v temperature=2\r\n", i)
+
+    host := fmt.Sprintf("hostname-%d.example.com", rand.Intn(100))
+    lines := []string{
+        fmt.Sprintf("cpu_usage,host=%s,cpu=cpu-total active=%v", host, rand.Intn(25)*4),
+        fmt.Sprintf("mem_used,host=%s percent=%v", host, rand.Intn(25)*4),
+        fmt.Sprintf("swap_used,host=%s percent=%v", host, rand.Intn(25)*4),
+        fmt.Sprintf("disk_used,host=%s,path=/tmp percent=%v", host, rand.Intn(25)*4),
+        fmt.Sprintf("disk_used,host=%s,path=/usr percent=%v", host, rand.Intn(25)*4),
+        fmt.Sprintf("procstat_lookup,host=%s,application=test,instance=1 running=%v", host, rand.Intn(1)),
+        fmt.Sprintf("filestat,host=%s,path=/test/test/test exists=%v", host, rand.Intn(1)),
     }
-    return []byte(lines)
+    //for i := 0; i < size; i++ {
+    //    lines = lines + fmt.Sprintf("cpu_usage,host=%s,cpu=cpu-total active=%v\r\n", host, rand.Intn(25)*4)
+    //}
+
+    return []byte(strings.Join(lines, "\r\n"))
 }
 
 func main() {
+
+    // Command-line flag parsing
+    WriteUrl       := flag.String("remoteWrite.url", "http://localhost:8480/insert/0/influx/write", "RemoteWriteUrl")
+    Threads        := flag.Int("threads", 0, "Threads")
+    PacketSize     := flag.Int("packet.size", 500, "PacketSize")
+    Interval       := flag.Int("interval", 10, "Interval")
+    flag.Parse()
+
+    start := Start{
+        WriteUrl:   *WriteUrl,
+        Threads:    *Threads,
+        PacketSize: *PacketSize,
+        Interval:   *Interval,
+    }
+
+    startTest(start)
 
     // Creating monitoring
     //prometheus.MustRegister(requestErrors)
