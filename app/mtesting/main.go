@@ -126,6 +126,10 @@ func startTestInflux(start Start) {
     run <- 0
     sdt = time.Now().UTC().Unix()
 
+    atomic.StoreUint64(&stats.RequestTotal, 0)
+    atomic.StoreUint64(&stats.RequestErrors, 0)
+    atomic.StoreUint64(&stats.RequestSuccess, 0)
+
     for t := 0; t < start.Threads; t++ {
 
         if len(run) == 0 {
@@ -506,7 +510,7 @@ func main() {
     //http.Handle("/metrics", promhttp.Handler())
     http.HandleFunc("/api/v1/start", httpStart)
     http.HandleFunc("/api/v1/stop", httpStop)
-    http.HandleFunc("/api/v1/ws", wsEndpoint)
+    http.HandleFunc("/ws", wsEndpoint)
 
     log.Fatal(http.ListenAndServe(*lsAddress, nil))
 }
