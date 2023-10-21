@@ -3,7 +3,7 @@ ARG app_name
 
 COPY . /src/
 WORKDIR /src/
-RUN go build -o /bin/${app_name} app/${app_name}/main.go
+RUN go build -o /bin/${app_name} app/${app_name}/*.go
 
 FROM alpine:3.15.0
 ARG app_name

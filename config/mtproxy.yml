@@ -1,19 +1,18 @@
 upstreams: 
-  - listen_addr: "127.0.0.1:7001"
+  - listen_addr: "127.0.0.1:7000"
     url_map:
       - src_paths:
-          - "/api/v1/label/[^/]+/values"
+          - "/insert/.*"
         url_prefix:
-          - "http://127.0.0.1:7010/api"
-          - "http://127.0.0.1:7011/api"
-        users:
-          - username: "admin"
-            password: "d033e22ae348aeb5660fc2140aec35850c4da997"
+          - "http://127.0.0.1:8087"
 
   - listen_addr: 127.0.0.1:7002
     url_map:
       - src_paths:
           - "/test"
+        users:
+          - username: "admin"
+            password: "d033e22ae348aeb5660fc2140aec35850c4da997"
 
   - listen_addr: 127.0.0.1:7023
     

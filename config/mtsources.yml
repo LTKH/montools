@@ -1,0 +1,14 @@
+upstreams: 
+  - listen_addr: "127.0.0.1:9090"
+    type: prometheus
+    source:
+      type: clickhouse
+      addr: ["127.0.0.1:9000"]
+      database: "default"
+      username: ""
+      password: ""
+      fields:
+        default: "count"
+        timestamp: "timestamp"
+      dial_timeout: 10
+      max_execution_time: 60

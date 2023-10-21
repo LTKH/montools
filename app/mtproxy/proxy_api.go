@@ -87,40 +87,39 @@ func getPrefixURL(prefix []*URLPrefix) (*URLPrefix, bool) {
 func (api *Api) reverseProxy(w http.ResponseWriter, r *http.Request){
     monitor.RequestTotal.With(prometheus.Labels{"listen_addr": api.Upstream.ListenAddr}).Inc()
 
-    for _, urlMap := range api.Upstream.URLMap {
-        for _, regPath := range urlMap.SrcPaths {
-            if regPath.RE.Match([]byte(r.URL.Path)) {
+    for _, mapPath := range api.Upstream.MapPaths {
+        if mapPath.RE.Match([]byte(r.URL.Path)) {
 
-                if len(urlMap.Users) > 0 {
-                    username, password, ok := r.BasicAuth()
-                    if !ok {
-                        w.WriteHeader(401)
-                        return
-                    }
-                    mPassword, ok := urlMap.MapUsers[username]
-                    if !ok {
-                        w.WriteHeader(403)
-                        return
-                    }
-                    if getStringHash(password) != mPassword {
-                        w.WriteHeader(403)
-                        return
-                    }
-                }
-
-                if urlPrefix, ok := getPrefixURL(urlMap.URLPrefix); ok {
-                    monitor.ProxyTotal.With(prometheus.Labels{"url_prefix": urlPrefix.URL}).Inc()
-                    urlPrefix.Requests <- 1
-                    r.Header.Set("proxy-target-url", urlPrefix.URL)
-                    getReverseProxy().ServeHTTP(w, r)
-                    if len(urlPrefix.Requests) > 0 {
-                        <- urlPrefix.Requests
-                    }
+            if len(api.Upstream.URLMap[mapPath.index].Users) > 0 {
+                username, password, ok := r.BasicAuth()
+                if !ok {
+                    w.WriteHeader(401)
                     return
                 }
-                w.WriteHeader(503)
+                mPassword, ok := api.Upstream.URLMap[mapPath.index].MapUsers[username]
+                if !ok {
+                    w.WriteHeader(403)
+                    return
+                }
+                if getStringHash(password) != mPassword {
+                    w.WriteHeader(403)
+                    return
+                }
+            }
+
+            if urlPrefix, ok := getPrefixURL(api.Upstream.URLMap[mapPath.index].URLPrefix); ok {
+                monitor.ProxyTotal.With(prometheus.Labels{"url_prefix": urlPrefix.URL}).Inc()
+                urlPrefix.Requests <- 1
+                r.Header.Set("proxy-target-url", urlPrefix.URL)
+                getReverseProxy().ServeHTTP(w, r)
+                if len(urlPrefix.Requests) > 0 {
+                    <- urlPrefix.Requests
+                }
                 return
             }
+
+            w.WriteHeader(503)
+            return
         }
     }
 

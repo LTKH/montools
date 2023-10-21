@@ -19,11 +19,12 @@ type Config struct {
 type Upstream struct {
     ListenAddr       string                  `yaml:"listen_addr"`
     URLMap           []*URLMap               `yaml:"url_map"`
+    MapPaths         []SrcPath               `yaml:"-"`
 }
 
 // URLMap is a mapping from source paths to target urls.
 type URLMap struct {
-    SrcPaths         []*SrcPath              `yaml:"src_paths"`
+    SrcPaths         []string                `yaml:"src_paths"`
     URLPrefix        []*URLPrefix            `yaml:"url_prefix"`
     Users            []*UserInfo             `yaml:"users"`
     MapUsers         map[string]string       `yaml:"-"`
@@ -40,6 +41,7 @@ type URLPrefix struct {
 type SrcPath struct {
     sOriginal        string
     RE               *regexp.Regexp
+    index            int
 }
 
 // UserInfo is user information
@@ -56,10 +58,12 @@ func (up *URLPrefix) UnmarshalYAML(f func(interface{}) error) error {
     }
     up.Check = true
     up.URL = s
+    up.Requests = make(chan int, 1000000)
     return nil
 }
 
 // UnmarshalYAML implements yaml.Unmarshaler
+/*
 func (sp *SrcPath) UnmarshalYAML(f func(interface{}) error) error {
     var s string
     if err := f(&s); err != nil {
@@ -74,6 +78,7 @@ func (sp *SrcPath) UnmarshalYAML(f func(interface{}) error) error {
     sp.RE = re
     return nil
 }
+*/
 
 func configNew(filename string) (*Config, error) {
 
@@ -89,15 +94,25 @@ func configNew(filename string) (*Config, error) {
     }
 
     for _, stream := range cfg.Upstreams {
-        for _, urlMap := range stream.URLMap {
+        for i, urlMap := range stream.URLMap {
+            for _, srcPaths := range urlMap.SrcPaths {
+                var mp SrcPath
+                mp.sOriginal = srcPaths
+                mp.index = i
+
+                re, err := regexp.Compile("^(?:" + srcPaths + ")$")
+                if err != nil {
+                    return cfg, fmt.Errorf("cannot build regexp from %q: %w", srcPaths, err)
+                }
+                mp.RE = re
+
+                stream.MapPaths = append(stream.MapPaths, mp)
+            }
             mu := make(map[string]string)
             for _, user := range urlMap.Users {
                 mu[user.Username] = user.Password
             }
             urlMap.MapUsers = mu
-            for _, urlPrefix := range urlMap.URLPrefix {
-                urlPrefix.Requests = make(chan int, 1000000)
-            }
         }
     }
     
