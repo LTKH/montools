@@ -374,6 +374,46 @@ func httpStop(w http.ResponseWriter, r *http.Request) {
     return
 }
 
+func getStatus() ([]byte, error) {
+    tnow := time.Now().UTC().Unix() - sdt
+    rspd := float64(0)
+    if tnow > 0 {
+        rspd = float64(stats.RequestSuccess / uint64(tnow))
+    }
+
+    jsn, err := json.Marshal(
+        &Resp{
+            Status:"success", 
+            Data: Data{
+                RequestTotal: stats.RequestTotal,
+                RequestSuccess: stats.RequestSuccess,
+                RequestErrors: stats.RequestErrors,
+                PacketSize: stats.PacketSize,
+                RequestSpeed: rspd,
+                Threads: len(thr),
+                Seconds: tnow,
+            },
+        },
+    )
+    
+    return jsn, err
+    
+}
+
+func httpStatus(w http.ResponseWriter, r *http.Request) {
+    jsn, err := getStatus()
+
+    if err != nil {
+        log.Printf("[error] %v", err)
+        w.WriteHeader(500)
+        return
+    }
+
+    w.WriteHeader(200)
+    w.Write(jsn)
+    return
+}
+
 func wsEndpoint(w http.ResponseWriter, r *http.Request) {
     ws, err := upgrader.Upgrade(w, r, nil)
     if err != nil {
@@ -385,26 +425,8 @@ func wsEndpoint(w http.ResponseWriter, r *http.Request) {
 
     for {
 
-        tnow := time.Now().UTC().Unix() - sdt
-        rspd := float64(0)
-        if tnow > 0 {
-            rspd = float64(stats.RequestSuccess / uint64(tnow))
-        }
+        jsn, err := getStatus()
 
-        jsn, err := json.Marshal(
-            &Resp{
-                Status:"success", 
-                Data: Data{
-                    RequestTotal: stats.RequestTotal,
-                    RequestSuccess: stats.RequestSuccess,
-                    RequestErrors: stats.RequestErrors,
-                    PacketSize: stats.PacketSize,
-                    RequestSpeed: rspd,
-                    Threads: len(thr),
-                    Seconds: tnow,
-                },
-            },
-        )
         if err != nil {
             log.Printf("[error] %v", err)
             w.WriteHeader(500)
@@ -507,23 +529,10 @@ func main() {
 
     log.Print("[info] mtstress started")
 
+    http.HandleFunc("/api/v1/start", httpStart)
+    http.HandleFunc("/api/v1/stop", httpStop)
+    http.HandleFunc("/api/v1/status", httpStatus)
+    http.HandleFunc("/ws", wsEndpoint)
+
     log.Fatal(http.ListenAndServe(*lsAddress, nil))
-
-    go func(addr string) {
-        mux := http.NewServeMux()
-        //http.Handle("/metrics", promhttp.Handler())
-        mux.HandleFunc("/api/v1/start", httpStart)
-        mux.HandleFunc("/api/v1/stop", httpStop)
-        mux.HandleFunc("/ws", wsEndpoint)
-
-        err := http.ListenAndServe(addr, mux)
-        if err != nil {
-            log.Fatalf("[error] %v", err)
-        }
-    }(*lsAddress)
-
-    // Daemon mode
-    for {
-        time.Sleep(60 * time.Second)
-    }
 }
