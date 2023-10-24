@@ -100,9 +100,10 @@ type Options struct {
 }
 
 var (
-    lsAddress   = flag.String("web.listen-address", "127.0.0.1:8065", "listen address")
+    lsAddress = flag.String("web.listen-address", "127.0.0.1:8065", "listen address")
+    wsAddress = flag.String("web.socket-address", "127.0.0.1:8066", "socket address")
 
-    upgrader    = websocket.Upgrader{
+    upgrader  = websocket.Upgrader{
         ReadBufferSize:  1024,
         WriteBufferSize: 1024,
         CheckOrigin:     func(r *http.Request) bool { return true },
@@ -507,10 +508,36 @@ func main() {
 
     log.Print("[info] mtstress started")
 
-    //http.Handle("/metrics", promhttp.Handler())
-    http.HandleFunc("/api/v1/start", httpStart)
-    http.HandleFunc("/api/v1/stop", httpStop)
-    http.HandleFunc("/ws", wsEndpoint)
-
     log.Fatal(http.ListenAndServe(*lsAddress, nil))
+
+    go func(addr string) {
+        mux := http.NewServeMux()
+        //http.Handle("/metrics", promhttp.Handler())
+        mux.HandleFunc("/api/v1/start", httpStart)
+        mux.HandleFunc("/api/v1/stop", httpStop)
+        //mux.HandleFunc("/ws", wsEndpoint)
+
+        err := http.ListenAndServe(addr, mux)
+        if err != nil {
+            log.Fatalf("[error] %v", err)
+        }
+    }(*lsAddress)
+
+    go func(addr string) {
+        mux := http.NewServeMux()
+        //http.Handle("/metrics", promhttp.Handler())
+        //mux.HandleFunc("/api/v1/start", httpStart)
+        //mux.HandleFunc("/api/v1/stop", httpStop)
+        mux.HandleFunc("/ws", wsEndpoint)
+
+        err := http.ListenAndServe(addr, mux)
+        if err != nil {
+            log.Fatalf("[error] %v", err)
+        }
+    }(*wsAddress)
+
+    // Daemon mode
+    for {
+        time.Sleep(60 * time.Second)
+    }
 }
