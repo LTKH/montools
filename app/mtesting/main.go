@@ -100,8 +100,7 @@ type Options struct {
 }
 
 var (
-    lsAddress = flag.String("web.listen-address", "127.0.0.1:8065", "listen address")
-    wsAddress = flag.String("web.socket-address", "127.0.0.1:8066", "socket address")
+    lsAddress = flag.String("web.listen-address", "0.0.0.0:8065", "listen address")
 
     upgrader  = websocket.Upgrader{
         ReadBufferSize:  1024,
@@ -515,26 +514,13 @@ func main() {
         //http.Handle("/metrics", promhttp.Handler())
         mux.HandleFunc("/api/v1/start", httpStart)
         mux.HandleFunc("/api/v1/stop", httpStop)
-        //mux.HandleFunc("/ws", wsEndpoint)
-
-        err := http.ListenAndServe(addr, mux)
-        if err != nil {
-            log.Fatalf("[error] %v", err)
-        }
-    }(*lsAddress)
-
-    go func(addr string) {
-        mux := http.NewServeMux()
-        //http.Handle("/metrics", promhttp.Handler())
-        //mux.HandleFunc("/api/v1/start", httpStart)
-        //mux.HandleFunc("/api/v1/stop", httpStop)
         mux.HandleFunc("/ws", wsEndpoint)
 
         err := http.ListenAndServe(addr, mux)
         if err != nil {
             log.Fatalf("[error] %v", err)
         }
-    }(*wsAddress)
+    }(*lsAddress)
 
     // Daemon mode
     for {
