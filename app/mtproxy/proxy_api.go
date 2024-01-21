@@ -125,3 +125,10 @@ func (api *Api) reverseProxy(w http.ResponseWriter, r *http.Request){
 
     w.WriteHeader(404)
 }
+
+func (api *Api) healthCheck(w http.ResponseWriter, r *http.Request){
+    w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+    w.WriteHeader(200)
+    w.Write([]byte("OK"))
+    return
+}

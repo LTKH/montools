@@ -71,7 +71,9 @@ func main() {
         }
 
         mux := http.NewServeMux()
+        mux.HandleFunc("/health", proxy.healthCheck)
         mux.HandleFunc("/", proxy.reverseProxy)
+
         go func(u *Upstream) {
             log.Printf("[info] %v", u.ListenAddr)
             err := http.ListenAndServe(u.ListenAddr, mux)
