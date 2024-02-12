@@ -18,6 +18,8 @@ type Config struct {
 
 type Upstream struct {
     ListenAddr       string                  `yaml:"listen_addr"`
+    CertFile         string                  `yaml:"cert_file"`
+    CertKey          string                  `yaml:"cert_key"`
     URLMap           []*URLMap               `yaml:"url_map"`
     MapPaths         []SrcPath               `yaml:"-"`
 }

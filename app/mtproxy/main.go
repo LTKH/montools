@@ -76,9 +76,14 @@ func main() {
 
         go func(u *Upstream) {
             log.Printf("[info] %v", u.ListenAddr)
-            err := http.ListenAndServe(u.ListenAddr, mux)
-            if err != nil {
-                log.Fatalf("[error] %v", err)
+            if u.CertFile != "" && u.CertKey != "" {
+                if err := http.ListenAndServeTLS(u.ListenAddr, u.CertFile, u.CertKey, mux); err != nil {
+                    log.Fatalf("[error] %v", err)
+                }
+            } else {
+                if err := http.ListenAndServe(u.ListenAddr, mux); err != nil {
+                    log.Fatalf("[error] %v", err)
+                }
             }
         }(u)
     }
