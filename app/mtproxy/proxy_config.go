@@ -1,6 +1,7 @@
 package main
 
 import (
+    "io"
     "fmt"
     //"path"
     //"errors"
@@ -10,7 +11,12 @@ import (
     //"net/url"
     "io/ioutil"
     "gopkg.in/yaml.v2"
+    "time"
+    "net/http"
+    "log"
 )
+
+var httpClient = &http.Client{Timeout: 60 * time.Second}
 
 type Config struct {
     Upstreams        []*Upstream             `yaml:"upstreams"`
@@ -30,12 +36,14 @@ type URLMap struct {
     URLPrefix        []*URLPrefix            `yaml:"url_prefix"`
     Users            []*UserInfo             `yaml:"users"`
     MapUsers         map[string]string       `yaml:"-"`
+    HealthCheck      string                  `yaml:"health_check"`
 }
 
 // URLPrefix represents passed `url_prefix`
 type URLPrefix struct {
-    Check            bool
+    //Check            bool
     Requests         chan int
+    Health           chan int
     URL              string
 }
 
@@ -58,9 +66,10 @@ func (up *URLPrefix) UnmarshalYAML(f func(interface{}) error) error {
     if err := f(&s); err != nil {
         return err
     }
-    up.Check = true
+    //up.Check = true
     up.URL = s
     up.Requests = make(chan int, 1000000)
+    up.Health = make(chan int, 5)
     return nil
 }
 
@@ -81,6 +90,27 @@ func (sp *SrcPath) UnmarshalYAML(f func(interface{}) error) error {
     return nil
 }
 */
+
+func request(method, url string, data io.Reader) ([]byte, int, error) {
+
+    req, err := http.NewRequest(method, url, data)
+    if err != nil {
+        return nil, 0, err
+    }
+    
+    res, err := httpClient.Do(req)
+    if err != nil {
+        return nil, 500, err
+    }
+    defer res.Body.Close()
+    
+    body, err := ioutil.ReadAll(res.Body)
+    if err != nil {
+        return nil, res.StatusCode, err
+    }
+    
+    return body, res.StatusCode, nil
+}
 
 func configNew(filename string) (*Config, error) {
 
@@ -109,6 +139,24 @@ func configNew(filename string) (*Config, error) {
                 mp.RE = re
 
                 stream.MapPaths = append(stream.MapPaths, mp)
+            }
+            for _, urlPrefix := range urlMap.URLPrefix {
+                go func(){
+                    for{
+                        _, code, err := request("GET", urlPrefix.URL+urlMap.HealthCheck, nil)
+                        if err != nil || code >= 300 {
+                            if len(urlPrefix.Health) < 5 {
+                                urlPrefix.Health <- 1
+                            }
+                            log.Printf("[warn] \"GET %v\" %v", urlPrefix.URL+urlMap.HealthCheck, code)
+                        } else {
+                            if len(urlPrefix.Health) > 0 {
+                                <- urlPrefix.Health
+                            }
+                        }
+                        time.Sleep(1 * time.Second)
+                    }
+                }()
             }
             mu := make(map[string]string)
             for _, user := range urlMap.Users {

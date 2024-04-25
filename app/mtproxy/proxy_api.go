@@ -12,6 +12,7 @@ import (
     "sync"
     "github.com/ltkh/montools/internal/monitor"
     "github.com/prometheus/client_golang/prometheus"
+    "bytes"
 )
 
 var (
@@ -21,13 +22,16 @@ var (
 
 type Api struct {
     Upstream *Upstream
+    Debug    bool
 }
 
-func apiNew(upstream *Upstream) (*Api, error) {
-    return &Api{ Upstream: upstream }, nil
+func apiNew(upstream *Upstream, debug bool) (*Api, error) {
+    return &Api{ Upstream: upstream, Debug: debug }, nil
 }
 
 func initReverseProxy() {
+    errorLogger := log.New(new(bytes.Buffer), "[error]", 0)
+
     reverseProxy = &httputil.ReverseProxy{
         Director: func(r *http.Request) {
             targetURL := r.Header.Get("proxy-target-url")
@@ -51,8 +55,10 @@ func initReverseProxy() {
             return tr
         }(),
         FlushInterval: time.Second,
-        //ErrorLog:      logger.StdErrorLogger(),
-        //ErrorLog:      log.New(new(bytes.Buffer), "", 0),
+        //ErrorLog: logger.StdErrorLogger(),
+        //ErrorLog: log.New(new(bytes.Buffer), "", 0),
+        ErrorLog: errorLogger,
+
     }
 }
 
@@ -67,21 +73,27 @@ func getStringHash(text string) string {
     return hex.EncodeToString(h.Sum(nil))
 }
 
-func getPrefixURL(prefix []*URLPrefix) (*URLPrefix, bool) {
+func getPrefixURL(prefix []*URLPrefix) *URLPrefix {
+    var urlPrefix *URLPrefix
+
     if len(prefix) == 0 {
-        return nil, false
+        return urlPrefix
     }
+    
+    requests := 1000000
 
-    requests := 0
-
-    for _, urlPrefix := range prefix {
-        if urlPrefix.Check == true && len(urlPrefix.Requests) < requests {
-            return urlPrefix, true
+    for _, up := range prefix {
+        if len(up.Health) != 0 {
+            continue
         }
-        requests = len(urlPrefix.Requests)
+
+        if len(up.Requests) < requests {
+            requests = len(up.Requests)
+            urlPrefix = up
+        }
     }
 
-    return prefix[0], true
+    return urlPrefix
 }
 
 func (api *Api) reverseProxy(w http.ResponseWriter, r *http.Request){
@@ -89,6 +101,10 @@ func (api *Api) reverseProxy(w http.ResponseWriter, r *http.Request){
 
     for _, mapPath := range api.Upstream.MapPaths {
         if mapPath.RE.Match([]byte(r.URL.Path)) {
+
+            if api.Debug {
+                log.Printf("[debug] proxy match found Path - %v", r.URL.Path)
+            }
 
             if len(api.Upstream.URLMap[mapPath.index].Users) > 0 {
                 username, password, ok := r.BasicAuth()
@@ -107,9 +123,16 @@ func (api *Api) reverseProxy(w http.ResponseWriter, r *http.Request){
                 }
             }
 
-            if urlPrefix, ok := getPrefixURL(api.Upstream.URLMap[mapPath.index].URLPrefix); ok {
+            if urlPrefix := getPrefixURL(api.Upstream.URLMap[mapPath.index].URLPrefix); urlPrefix != nil {
+                
+                if api.Debug {
+                    log.Printf("[debug] proxy match found URL - %v", urlPrefix.URL)
+                }
+
                 monitor.ProxyTotal.With(prometheus.Labels{"url_prefix": urlPrefix.URL}).Inc()
-                urlPrefix.Requests <- 1
+                if len(urlPrefix.Requests) < 1000000 {
+                    urlPrefix.Requests <- 1
+                }
                 r.Header.Set("proxy-target-url", urlPrefix.URL)
                 getReverseProxy().ServeHTTP(w, r)
                 if len(urlPrefix.Requests) > 0 {
@@ -118,17 +141,28 @@ func (api *Api) reverseProxy(w http.ResponseWriter, r *http.Request){
                 return
             }
 
-            w.WriteHeader(503)
+            w.WriteHeader(502)
             return
         }
     }
 
     w.WriteHeader(404)
+    return
 }
 
 func (api *Api) healthCheck(w http.ResponseWriter, r *http.Request){
     w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-    w.WriteHeader(200)
-    w.Write([]byte("OK"))
+
+    for _, urlMap := range api.Upstream.URLMap {
+        for _, urlPrefix := range urlMap.URLPrefix {
+            if len(urlPrefix.Health) == 0 {
+                w.WriteHeader(200)
+                w.Write([]byte("OK"))
+                return
+            }
+        }
+    }
+
+    w.WriteHeader(502)
     return
 }

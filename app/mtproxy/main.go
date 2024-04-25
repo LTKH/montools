@@ -25,6 +25,7 @@ func main() {
     logMaxAge      := flag.Int("loggerMaxAge", 10, "log max age")
     logCompress    := flag.Bool("loggerCompress", true, "log compress")
     encryptPass    := flag.String("encrypt", "", "encrypt password")
+    debug          := flag.Bool("debug", false, "debug mode")
     flag.Parse()
 
     if *encryptPass != "" {
@@ -65,7 +66,7 @@ func main() {
 
     for _, u := range cfg.Upstreams { 
         // Creating api
-        proxy, err := apiNew(u)
+        proxy, err := apiNew(u, *debug)
         if err != nil {
             log.Fatalf("[error] %v", err)
         }
