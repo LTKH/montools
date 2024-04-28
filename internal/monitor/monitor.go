@@ -23,11 +23,20 @@ var (
         },
         []string{"url_prefix"},
     )
+    HealthCheckFailed = prometheus.NewGaugeVec(
+        prometheus.GaugeOpts{
+            Namespace: "mtproxy_health_check",
+            Name:      "failed",
+            Help:      "",
+        },
+        []string{"url_prefix"},
+    )
 )
 
 func New(listen string){
     prometheus.MustRegister(RequestTotal)
 	prometheus.MustRegister(ProxyTotal)
+    prometheus.MustRegister(HealthCheckFailed)
 
     http.Handle("/metrics", promhttp.Handler())
     go http.ListenAndServe(listen, nil)

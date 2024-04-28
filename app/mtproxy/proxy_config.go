@@ -14,6 +14,8 @@ import (
     "time"
     "net/http"
     "log"
+    "github.com/ltkh/montools/internal/monitor"
+    "github.com/prometheus/client_golang/prometheus"
 )
 
 var httpClient = &http.Client{Timeout: 60 * time.Second}
@@ -141,7 +143,7 @@ func configNew(filename string) (*Config, error) {
                 stream.MapPaths = append(stream.MapPaths, mp)
             }
             for _, urlPrefix := range urlMap.URLPrefix {
-                go func(){
+                go func(urlPrefix *URLPrefix){
                     for{
                         _, code, err := request("GET", urlPrefix.URL+urlMap.HealthCheck, nil)
                         if err != nil || code >= 300 {
@@ -154,9 +156,10 @@ func configNew(filename string) (*Config, error) {
                                 <- urlPrefix.Health
                             }
                         }
+                        monitor.HealthCheckFailed.With(prometheus.Labels{"url_prefix": urlPrefix.URL}).Set(float64(len(urlPrefix.Health)))
                         time.Sleep(1 * time.Second)
                     }
-                }()
+                }(urlPrefix)
             }
             mu := make(map[string]string)
             for _, user := range urlMap.Users {
