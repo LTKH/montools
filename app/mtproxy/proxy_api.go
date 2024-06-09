@@ -9,15 +9,10 @@ import (
     "encoding/hex"
     "net/url"
     "time"
-    "sync"
+    "strconv"
+    //"sync"
     "github.com/ltkh/montools/internal/monitor"
     "github.com/prometheus/client_golang/prometheus"
-    "bytes"
-)
-
-var (
-    reverseProxy *httputil.ReverseProxy
-    reverseProxyOnce sync.Once
 )
 
 type Api struct {
@@ -29,18 +24,19 @@ func apiNew(upstream *Upstream, debug bool) (*Api, error) {
     return &Api{ Upstream: upstream, Debug: debug }, nil
 }
 
-func initReverseProxy() {
-    errorLogger := log.New(new(bytes.Buffer), "[error]", 0)
+func rewriteBody(resp *http.Response) (err error) {
+    username, _, _ := resp.Request.BasicAuth()
+    if username == "" { username = "unknown" }
+    monitor.ProxyTotal.With(prometheus.Labels{"target_url": resp.Request.URL.Path, "user": username, "code": strconv.Itoa(resp.StatusCode)}).Inc()
 
-    reverseProxy = &httputil.ReverseProxy{
+    return nil
+}
+
+func getReverseProxy(URLPrefix string) *httputil.ReverseProxy {
+    return &httputil.ReverseProxy{
         Director: func(r *http.Request) {
-            targetURL := r.Header.Get("proxy-target-url")
-            target, err := url.Parse(targetURL)
-            if err != nil {
-                log.Printf("[error] unexpected error when parsing targetURL=%q: %s", targetURL, err)
-                return
-            }
-            target.Path = target.Path+r.URL.Path
+            target, _ := url.Parse(URLPrefix)
+            target.Path = URLPrefix+r.URL.Path
             target.RawQuery = r.URL.RawQuery
             r.URL = target
         },
@@ -55,16 +51,9 @@ func initReverseProxy() {
             return tr
         }(),
         FlushInterval: time.Second,
-        //ErrorLog: logger.StdErrorLogger(),
-        //ErrorLog: log.New(new(bytes.Buffer), "", 0),
-        ErrorLog: errorLogger,
-
+        ErrorLog: nil,
+        ModifyResponse: rewriteBody,
     }
-}
-
-func getReverseProxy() *httputil.ReverseProxy {
-    reverseProxyOnce.Do(initReverseProxy)
-    return reverseProxy
 }
 
 func getStringHash(text string) string {
@@ -97,18 +86,19 @@ func getPrefixURL(prefix []*URLPrefix) *URLPrefix {
 }
 
 func (api *Api) reverseProxy(w http.ResponseWriter, r *http.Request){
-    monitor.RequestTotal.With(prometheus.Labels{"listen_addr": api.Upstream.ListenAddr}).Inc()
+    username, password, auth := r.BasicAuth()
+    if username == "" { username = "unknown" }
+    monitor.RequestTotal.With(prometheus.Labels{"listen_addr": api.Upstream.ListenAddr, "user": username}).Inc()
 
     for _, mapPath := range api.Upstream.MapPaths {
         if mapPath.RE.Match([]byte(r.URL.Path)) {
-
+        
             if api.Debug {
                 log.Printf("[debug] proxy match found Path - %v", r.URL.Path)
             }
 
             if len(api.Upstream.URLMap[mapPath.index].Users) > 0 {
-                username, password, ok := r.BasicAuth()
-                if !ok {
+                if !auth {
                     w.WriteHeader(401)
                     return
                 }
@@ -129,12 +119,12 @@ func (api *Api) reverseProxy(w http.ResponseWriter, r *http.Request){
                     log.Printf("[debug] proxy match found URL - %v", urlPrefix.URL)
                 }
 
-                monitor.ProxyTotal.With(prometheus.Labels{"url_prefix": urlPrefix.URL}).Inc()
                 if len(urlPrefix.Requests) < 1000000 {
                     urlPrefix.Requests <- 1
                 }
-                r.Header.Set("proxy-target-url", urlPrefix.URL)
-                getReverseProxy().ServeHTTP(w, r)
+                
+                getReverseProxy(urlPrefix.URL).ServeHTTP(w, r)
+                
                 if len(urlPrefix.Requests) > 0 {
                     <- urlPrefix.Requests
                 }

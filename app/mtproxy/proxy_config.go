@@ -156,7 +156,7 @@ func configNew(filename string) (*Config, error) {
                                 <- urlPrefix.Health
                             }
                         }
-                        monitor.HealthCheckFailed.With(prometheus.Labels{"url_prefix": urlPrefix.URL}).Set(float64(len(urlPrefix.Health)))
+                        monitor.HealthCheckFailed.With(prometheus.Labels{"target_url": urlPrefix.URL+urlMap.HealthCheck}).Set(float64(len(urlPrefix.Health)))
                         time.Sleep(1 * time.Second)
                     }
                 }(urlPrefix)

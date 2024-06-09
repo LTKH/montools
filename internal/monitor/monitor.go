@@ -7,13 +7,13 @@ import (
 )
 
 var (
-	RequestTotal = prometheus.NewCounterVec(
+    RequestTotal = prometheus.NewCounterVec(
         prometheus.CounterOpts{
             Namespace: "mtproxy_http_request",
             Name:      "total",
             Help:      "",
         },
-        []string{"listen_addr"},
+        []string{"listen_addr","user"},
     )
     ProxyTotal = prometheus.NewCounterVec(
         prometheus.CounterOpts{
@@ -21,7 +21,7 @@ var (
             Name:      "total",
             Help:      "",
         },
-        []string{"url_prefix"},
+        []string{"target_url","user","code"},
     )
     HealthCheckFailed = prometheus.NewGaugeVec(
         prometheus.GaugeOpts{
@@ -29,13 +29,13 @@ var (
             Name:      "failed",
             Help:      "",
         },
-        []string{"url_prefix"},
+        []string{"target_url"},
     )
 )
 
 func New(listen string){
     prometheus.MustRegister(RequestTotal)
-	prometheus.MustRegister(ProxyTotal)
+    prometheus.MustRegister(ProxyTotal)
     prometheus.MustRegister(HealthCheckFailed)
 
     http.Handle("/metrics", promhttp.Handler())
