@@ -32,12 +32,13 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
 
-      - name: Build and push Docker image mtesting
+      - name: Build and push Docker image mtproxy
         uses: docker/build-push-action@ad44023a93711e3deb337508980b4b5e9bcdc5dc
         with:
           context: .
           push: true
           build-args: |
-            app_name=mtesting
-          tags: ghcr.io/ltkh/mtesting:latest
+            app_name=mtproxy
+            http_listen_addr=:8426
+          tags: ghcr.io/ltkh/mtproxy:latest
           labels: ${{ steps.meta.outputs.labels }}

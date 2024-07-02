@@ -7,6 +7,7 @@ RUN go build -o /bin/${app_name} app/${app_name}/*.go
 
 FROM alpine:3.15.0
 ARG app_name
+ARG http_listen_addr
 
 ADD https://github.com/sgerrand/alpine-pkg-glibc/releases/download/2.34-r0/glibc-2.34-r0.apk /tmp
 RUN apk update && \
@@ -15,7 +16,7 @@ RUN apk update && \
 
 EXPOSE 8010
 
-COPY --from=builder /bin/${app_name} /bin/mtools
+COPY --from=builder /bin/${app_name} /bin/mtproxy
 
-ENTRYPOINT ["/bin/mtools"]
-CMD ["-web.listen-address=:8065"]
+ENTRYPOINT ["/bin/mtproxy"]
+CMD ["-httpListenAddr={http_listen_addr}"]
