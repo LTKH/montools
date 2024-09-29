@@ -1,22 +1,39 @@
 upstreams: 
   - listen_addr: "127.0.0.1:7100"
-    cert_file: "config/mtproxy.crt"
-    cert_key: "config/mtproxy.key"
     url_map:
       - src_paths:
-          - "/select/0/prometheus.*"
+          - "/insert/0/influx.*"
         url_prefix:
           - "http://127.0.0.1:8087"
-          - "http://127.0.0.1:8088"
-        health_check: "/health"
-
-  - listen_addr: 127.0.0.1:7102
+        #health_check: "/health"
+        #users:
+        #  - username: "admin"
+        #    password: "d033e22ae348aeb5660fc2140aec35850c4da997"
+  - listen_addr: "127.0.0.1:7101"
     url_map:
       - src_paths:
-          - "/test"
+          - "/insert/0/influx.*"
         url_prefix:
-          - "http://127.0.0.1:3000"
-        users:
-          - username: "admin"
-            password: "d033e22ae348aeb5660fc2140aec35850c4da997"
-        health_check: "/api/health"
+          - "http://127.0.0.1:8087"
+
+  #- listen_addr: "127.0.0.1:7100"
+  #  cert_file: "config/mtproxy.crt"
+  #  cert_key: "config/mtproxy.key"
+  #  url_map:
+  #    - src_paths:
+  #        - "/select/0/prometheus.*"
+  #      url_prefix:
+  #        - "http://127.0.0.1:8087"
+  #        - "http://127.0.0.1:8088"
+  #      health_check: "/health"
+
+  #- listen_addr: 127.0.0.1:7102
+  #  url_map:
+  #    - src_paths:
+  #        - "/test"
+  #      url_prefix:
+  #        - "http://127.0.0.1:3000"
+  #      users:
+  #        - username: "admin"
+  #          password: "d033e22ae348aeb5660fc2140aec35850c4da997"
+  #      health_check: "/api/health"

@@ -1,6 +1,8 @@
 package main
 
 import (
+    "net"
+    "net/rpc"
     "net/http"
     "time"
     "log"
@@ -17,13 +19,15 @@ import (
 func main() {
 
     // Command-line flag parsing
-    lsAddress      := flag.String("httpListenAddr", "127.0.0.1:8426", "listen address")
-    cfFile         := flag.String("configFile", "config/mtproxy.yml", "config file")
-    lgFile         := flag.String("loggerFile", "", "log file")
-    logMaxSize     := flag.Int("loggerMaxSize", 1, "log max size") 
-    logMaxBackups  := flag.Int("loggerMaxBackups", 3, "log max backups")
-    logMaxAge      := flag.Int("loggerMaxAge", 10, "log max age")
-    logCompress    := flag.Bool("loggerCompress", true, "log compress")
+    lsAddress      := flag.String("listen.client-address", "127.0.0.1:8426", "listen address")
+    prAddress      := flag.String("listen.peer-address", "127.0.0.1:8427", "listen peer address")
+    //initClucter    := flag.String("initial-cluster", "", "initial cluster nodes")
+    cfFile         := flag.String("config.file", "config/mtproxy.yml", "config file")
+    lgFile         := flag.String("log.file", "", "log file")
+    logMaxSize     := flag.Int("log.max-size", 1, "log max size") 
+    logMaxBackups  := flag.Int("log.max-backups", 3, "log max backups")
+    logMaxAge      := flag.Int("log.max-age", 10, "log max age")
+    logCompress    := flag.Bool("log.compress", true, "log compress")
     encryptPass    := flag.String("encrypt", "", "encrypt password")
     debug          := flag.Bool("debug", false, "debug mode")
     flag.Parse()
@@ -44,6 +48,20 @@ func main() {
         })
     }
 
+    // Initial cluster nodes
+    peers := []string{}
+    /*
+    if *initClucter != "" {
+        peers = strings.Split(*initClucter, ",")
+    }
+    if len(peers) == 0 && os.Getenv("MTPROXY_INITIAL_CLUSTER") != "" {
+        peers = strings.Split(os.Getenv("MTPROXY_INITIAL_CLUSTER"), ",")
+    }
+    if len(peers) == 0 && *prAddress != "" {
+        peers = append(peers, *prAddress)
+    }
+    */
+
     // Program signal processing
     c := make(chan os.Signal, 1)
     signal.Notify(c, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
@@ -61,22 +79,39 @@ func main() {
         log.Fatalf("[error] %v", err)
     }
 
+    // Creating RPC
+    rpcV1, err := NewRPC()
+    if err != nil {
+        log.Fatalf("[error] %v", err)
+    }
+
+    // TCP Listen
+    go func(){
+        inbound, err := net.Listen("tcp", *prAddress)
+        if err != nil {
+            log.Fatalf("[error] %v", err)
+        }
+        rpc.Register(rpcV1)
+        rpc.Accept(inbound)
+    }()
+
     //opening monitoring port
     monitor.New(*lsAddress)
 
     for _, u := range cfg.Upstreams { 
         // Creating api
-        proxy, err := apiNew(u, *debug)
+        apiV1, err := NewAPI(u, peers, *debug)
         if err != nil {
             log.Fatalf("[error] %v", err)
         }
 
         mux := http.NewServeMux()
-        mux.HandleFunc("/health", proxy.healthCheck)
-        mux.HandleFunc("/", proxy.reverseProxy)
+        mux.HandleFunc("/health", apiV1.healthCheck)
+        //mux.HandleFunc("/limits", apiV1.getLimits)
+        mux.HandleFunc("/", apiV1.reverseProxy)
 
         go func(u *Upstream) {
-            log.Printf("[info] %v", u.ListenAddr)
+            log.Printf("[info] upstream address: %v", u.ListenAddr)
             if u.CertFile != "" && u.CertKey != "" {
                 if err := http.ListenAndServeTLS(u.ListenAddr, u.CertFile, u.CertKey, mux); err != nil {
                     log.Fatalf("[error] %v", err)
@@ -87,6 +122,13 @@ func main() {
                 }
             }
         }(u)
+
+        go func(peers []string) {
+            for {
+                apiV1.ApiPeers(peers)
+                time.Sleep(10 * time.Second)
+            }
+        }(peers)
     }
 
     log.Print("[info] mtproxy started")

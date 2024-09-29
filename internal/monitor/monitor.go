@@ -9,24 +9,28 @@ import (
 var (
     RequestTotal = prometheus.NewCounterVec(
         prometheus.CounterOpts{
-            Namespace: "mtproxy_http_request",
-            Name:      "total",
+            Name:      "mtproxy_http_request_total",
             Help:      "",
         },
-        []string{"listen_addr","user"},
+        []string{"listen_addr","user","code"},
+    )
+    SizeBytesBucket = prometheus.NewGaugeVec(
+        prometheus.GaugeOpts{
+            Name:      "mtproxy_http_size_bytes_avg",
+            Help:      "",
+        },
+        []string{"listen_addr","object"},
     )
     ProxyTotal = prometheus.NewCounterVec(
         prometheus.CounterOpts{
-            Namespace: "mtproxy_http_proxy",
-            Name:      "total",
+            Name:      "mtproxy_http_proxy_total",
             Help:      "",
         },
         []string{"target_url","user","code"},
     )
     HealthCheckFailed = prometheus.NewGaugeVec(
         prometheus.GaugeOpts{
-            Namespace: "mtproxy_health_check",
-            Name:      "failed",
+            Name:      "mtproxy_health_check_failed",
             Help:      "",
         },
         []string{"target_url"},
@@ -35,6 +39,7 @@ var (
 
 func New(listen string){
     prometheus.MustRegister(RequestTotal)
+    prometheus.MustRegister(SizeBytesBucket)
     prometheus.MustRegister(ProxyTotal)
     prometheus.MustRegister(HealthCheckFailed)
 

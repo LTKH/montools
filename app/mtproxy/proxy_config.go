@@ -26,6 +26,8 @@ type Config struct {
 
 type Upstream struct {
     ListenAddr       string                  `yaml:"listen_addr"`
+    ObjectHeader     string                  `yaml:"object_header"`
+    SizeLimit        float64                 `yaml:"size_limit"`
     CertFile         string                  `yaml:"cert_file"`
     CertKey          string                  `yaml:"cert_key"`
     URLMap           []*URLMap               `yaml:"url_map"`
@@ -128,6 +130,9 @@ func configNew(filename string) (*Config, error) {
     }
 
     for _, stream := range cfg.Upstreams {
+        if stream.ObjectHeader == "" { 
+            stream.ObjectHeader = "X-Object-Header"
+        }
         for i, urlMap := range stream.URLMap {
             for _, srcPaths := range urlMap.SrcPaths {
                 var mp SrcPath
@@ -143,23 +148,25 @@ func configNew(filename string) (*Config, error) {
                 stream.MapPaths = append(stream.MapPaths, mp)
             }
             for _, urlPrefix := range urlMap.URLPrefix {
-                go func(urlPrefix *URLPrefix){
-                    for{
-                        _, code, err := request("GET", urlPrefix.URL+urlMap.HealthCheck, nil)
-                        if err != nil || code >= 300 {
-                            if len(urlPrefix.Health) < 5 {
-                                urlPrefix.Health <- 1
+                if urlMap.HealthCheck != "" {
+                    go func(urlPrefix *URLPrefix){
+                        for{
+                            _, code, err := request("GET", urlPrefix.URL+urlMap.HealthCheck, nil)
+                            if err != nil || code >= 300 {
+                                if len(urlPrefix.Health) < 5 {
+                                    urlPrefix.Health <- 1
+                                }
+                                log.Printf("[warn] \"GET %v\" %v", urlPrefix.URL+urlMap.HealthCheck, code)
+                            } else {
+                                if len(urlPrefix.Health) > 0 {
+                                    <- urlPrefix.Health
+                                }
                             }
-                            log.Printf("[warn] \"GET %v\" %v", urlPrefix.URL+urlMap.HealthCheck, code)
-                        } else {
-                            if len(urlPrefix.Health) > 0 {
-                                <- urlPrefix.Health
-                            }
+                            monitor.HealthCheckFailed.With(prometheus.Labels{"target_url": urlPrefix.URL+urlMap.HealthCheck}).Set(float64(len(urlPrefix.Health)))
+                            time.Sleep(1 * time.Second)
                         }
-                        monitor.HealthCheckFailed.With(prometheus.Labels{"target_url": urlPrefix.URL+urlMap.HealthCheck}).Set(float64(len(urlPrefix.Health)))
-                        time.Sleep(1 * time.Second)
-                    }
-                }(urlPrefix)
+                    }(urlPrefix)
+                }
             }
             mu := make(map[string]string)
             for _, user := range urlMap.Users {
