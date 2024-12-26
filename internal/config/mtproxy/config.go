@@ -109,7 +109,7 @@ func NewConfig(filename string) (*Config, error) {
 
     for _, stream := range cfg.Upstreams {
         if stream.ObjectHeader == "" { 
-            stream.ObjectHeader = "X-Object-Header"
+            stream.ObjectHeader = "X-Custom-Object"
         }
         for i, urlMap := range stream.URLMap {
             for _, srcPaths := range urlMap.SrcPaths {

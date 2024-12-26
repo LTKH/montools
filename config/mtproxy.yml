@@ -6,7 +6,7 @@ http_client:
     max_idle_conns_per_host: 3000
     expect_continue_timeout: 1s
     tls_handshake_timeout: 5s
-    response_header_timeout: 10s
+    response_header_timeout: 15s
 
 upstreams: 
   - listen_addr: "127.0.0.1:8888"
@@ -14,6 +14,7 @@ upstreams:
     #update_stat: 10s
     url_map:
       - src_paths:
+          - "/api/v1/write"
           - "/influx/write"
         url_prefix:
           - "http://127.0.0.1:8428"
