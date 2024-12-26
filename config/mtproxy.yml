@@ -1,21 +1,29 @@
-upstreams: 
-  - listen_addr: "127.0.0.1:7100"
-    url_map:
-      - src_paths:
-          - "/insert/0/influx.*"
-        url_prefix:
-          - "http://127.0.0.1:8087"
-        #health_check: "/health"
-        #users:
-        #  - username: "admin"
-        #    password: "d033e22ae348aeb5660fc2140aec35850c4da997"
-  - listen_addr: "127.0.0.1:7101"
-    url_map:
-      - src_paths:
-          - "/insert/0/influx.*"
-        url_prefix:
-          - "http://127.0.0.1:8087"
+http_client:
+  transport:
+    dial_context:
+      timeout: 5s
+      keep_alive: 60s
+    max_idle_conns_per_host: 3000
+    expect_continue_timeout: 1s
+    tls_handshake_timeout: 5s
+    response_header_timeout: 10s
 
+upstreams: 
+  - listen_addr: "127.0.0.1:8888"
+    #size_limit: 60000
+    url_map:
+      - src_paths:
+          - "/influx/write"
+        url_prefix:
+          - "http://127.0.0.1:8428"
+        health_check: "/health"
+  #- listen_addr: "127.0.0.1:7101"
+  #  url_map:
+  #    - src_paths:
+  #        - "/insert/0/influx.*"
+  #      url_prefix:
+  #        - "http://127.0.0.1:8087"
+  #
   #- listen_addr: "127.0.0.1:7100"
   #  cert_file: "config/mtproxy.crt"
   #  cert_key: "config/mtproxy.key"

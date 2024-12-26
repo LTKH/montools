@@ -1,0 +1,21 @@
+ServerNames = ["localhost.de", "localhost", "127.0.0.1"]
+Interfaces = ["127.0.0.1:80", "127.0.0.1:443"]
+
+[SSL]
+  Key = ""
+  Cert = ""
+
+[[Location]]
+  Location = "/"
+  Destination = "http://127.0.0.1/"
+  SrcIPHeader = ""
+  Regex = false
+  Deny = ""
+
+[[Location]]
+  Location = "/subroute"
+  Destination = "http://127.0.0.1/lol.html"
+  SrcIPHeader = ""
+  Regex = false
+  Allow = ["127.0.0.1", "1.1.1.1"]
+  Deny = "all"

@@ -3,7 +3,9 @@ module github.com/ltkh/montools
 go 1.19
 
 require (
+	github.com/BurntSushi/toml v0.3.1
 	github.com/ClickHouse/clickhouse-go/v2 v2.10.1
+	github.com/JojiiOfficial/gaw v1.2.8
 	github.com/gorilla/mux v1.8.0
 	github.com/gorilla/websocket v1.5.0
 	github.com/grafana/loki v1.6.1
