@@ -11,6 +11,7 @@ http_client:
 upstreams: 
   - listen_addr: "127.0.0.1:8888"
     #size_limit: 60000
+    #update_stat: 10s
     url_map:
       - src_paths:
           - "/influx/write"

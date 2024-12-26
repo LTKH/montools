@@ -68,23 +68,25 @@ type Objects struct {
 
 type Object struct {
     Timestamp    int64
-    Size         float64
+    Size         int64
     Avg          float64
 }
 
-func (o *Objects) Set(object string, size float64) float64 {
+func (o *Objects) Set(object string, size int) float64 {
     o.Lock()
     defer o.Unlock()
 
+    avg := float64(size)
+
     item, ok := o.items[object]
     if ok {
-        o.items[object] = &Object{Timestamp: item.Timestamp, Size: item.Size + size, Avg: item.Avg}
-        size = item.Avg
+        o.items[object] = &Object{Timestamp: item.Timestamp, Size: item.Size + int64(size), Avg: item.Avg}
+        avg = item.Avg
     } else {
-        o.items[object] = &Object{Timestamp: time.Now().Unix(), Size: size, Avg: size}
+        o.items[object] = &Object{Timestamp: time.Now().Unix(), Size: int64(size), Avg: avg}
     }
 
-    return size
+    return avg
 }
 
 func (o *Objects) Update(object string) float64 {
@@ -97,7 +99,7 @@ func (o *Objects) Update(object string) float64 {
     if ok {
         sec := tsmp - item.Timestamp 
         if sec > 0 {
-            avg := item.Size/float64(sec)
+            avg := float64(item.Size/sec)
             if avg == 0 {
                 delete(o.items, object)
             } else {
@@ -168,7 +170,10 @@ func NewAPI(c *config.HttpClient, u *config.Upstream, d bool) (*API, error) {
                 avg := api.Objects.Update(object)
                 sizeBytesBucket.With(prometheus.Labels{"listen_addr": api.Upstream.ListenAddr, "object": object}).Set(avg)
             }
-            time.Sleep(5 * time.Second)
+            if api.Upstream.UpdateStat == 0 {
+                api.Upstream.UpdateStat = 5 * time.Second
+            }
+            time.Sleep(api.Upstream.UpdateStat)
         }
     }(api)
     
@@ -265,11 +270,11 @@ func (api *API) ReverseProxy(w http.ResponseWriter, r *http.Request) {
 
     // Get a limit for an object
     object := r.Header.Get(api.Upstream.ObjectHeader)
-    size := api.Objects.Set(object, float64(len(data)))
+    size := api.Objects.Set(object, len(data))
 
     // Checking the size limit
     if api.Upstream.SizeLimit > 0 {
-        if size > float64(api.Upstream.SizeLimit / len(api.Objects.items)) {
+        if size > float64(api.Upstream.SizeLimit / int64(len(api.Objects.items))) {
             if api.Debug {
                 log.Printf("[debug] payload too large (%v) - %v", object, r.URL.Path)
             }
