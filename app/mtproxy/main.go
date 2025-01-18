@@ -36,12 +36,12 @@ var (
         },
         []string{"listen_addr","user","code"},
     )
-    sizeKBytesBucket = prometheus.NewGaugeVec(
+    sizeBytesBucket = prometheus.NewGaugeVec(
         prometheus.GaugeOpts{
-            Name: "mtproxy_http_size_kbytes_avg",
+            Name: "mtproxy_http_size_bytes_avg",
             Help: "",
         },
-        []string{"listen_addr","object"},
+        []string{"listen_addr","url_path","object"},
     )
     healthCheckFailed = prometheus.NewGaugeVec(
         prometheus.GaugeOpts{
@@ -70,26 +70,24 @@ type Object struct {
     Timestamp    int64
     Size         float64
     Avg          float64
+    UrlPath      string
 }
 
-func (o *Objects) Set(object string, size float64) float64 {
+func (o *Objects) Set(object, path string, size float64) *Object {
     o.Lock()
     defer o.Unlock()
 
-    avg := float64(size)
-
     item, ok := o.items[object]
     if ok {
-        o.items[object] = &Object{Timestamp: item.Timestamp, Size: item.Size + size, Avg: item.Avg}
-        avg = item.Avg
+        o.items[object] = &Object{Timestamp: item.Timestamp, Size: item.Size + size, Avg: item.Avg, UrlPath: path}
     } else {
-        o.items[object] = &Object{Timestamp: time.Now().Unix(), Size: size, Avg: avg}
+        o.items[object] = &Object{Timestamp: time.Now().Unix(), Size: size, Avg: float64(size), UrlPath: path}
     }
 
-    return avg
+    return o.items[object]
 }
 
-func (o *Objects) Update(object string) float64 {
+func (o *Objects) Update(object string) *Object {
     o.Lock()
     defer o.Unlock()
 
@@ -100,17 +98,17 @@ func (o *Objects) Update(object string) float64 {
         sec := tsmp - item.Timestamp 
         if sec > 0 {
             avg := item.Size/float64(sec)
+            item = &Object{Timestamp: tsmp, Size: 0, Avg: avg, UrlPath: item.UrlPath}
             if avg == 0 {
                 delete(o.items, object)
             } else {
-                o.items[object] = &Object{Timestamp: tsmp, Size: 0, Avg: avg}
+                o.items[object] = item
             }
-            return avg
         }
-        return item.Avg
+        return item
     }
 
-    return 0
+    return &Object{}
 }
 
 func (o *Objects) Items() []string {
@@ -167,8 +165,10 @@ func NewAPI(c *config.HttpClient, u *config.Upstream, d bool) (*API, error) {
         for {
             items := api.Objects.Items()
             for _, object := range items {
-                avg := api.Objects.Update(object)
-                sizeKBytesBucket.With(prometheus.Labels{"listen_addr": api.Upstream.ListenAddr, "object": object}).Set(avg)
+                item := api.Objects.Update(object)
+                if item.Timestamp > 0 {
+                    sizeBytesBucket.With(prometheus.Labels{"listen_addr": api.Upstream.ListenAddr, "url_path": item.UrlPath, "object": object}).Set(item.Avg)
+                }
             }
             if api.Upstream.UpdateStat == 0 {
                 api.Upstream.UpdateStat = 5 * time.Second
@@ -290,11 +290,11 @@ func (api *API) ReverseProxy(w http.ResponseWriter, r *http.Request) {
 
     // Get a limit for an object
     object := r.Header.Get(api.Upstream.ObjectHeader)
-    size := api.Objects.Set(object, float64(len(data)/1024))
+    item := api.Objects.Set(object, r.URL.Path, float64(len(data)))
 
     // Checking the size limit
     if api.Upstream.SizeLimit > 0 {
-        if size > float64(api.Upstream.SizeLimit / int64(len(api.Objects.items))) {
+        if item.Avg > float64(api.Upstream.SizeLimit / int64(len(api.Objects.items))) {
             if api.Debug {
                 log.Printf("[debug] payload too large (%v) - %v", object, r.URL.Path)
             }
@@ -440,7 +440,7 @@ func main() {
 
     go func(){
         prometheus.MustRegister(requestTotal)
-        prometheus.MustRegister(sizeKBytesBucket)
+        prometheus.MustRegister(sizeBytesBucket)
         prometheus.MustRegister(healthCheckFailed)
 
         mux := http.NewServeMux()

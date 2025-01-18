@@ -14,11 +14,12 @@ export const options = {
 };
 
 export default function () {
-  var host = Math.random() * 100;
+  var host = Math.floor(Math.random() * 100);
 
   let res = http.get(`http://127.0.0.1:8084/api/v1/netmap/records?src_name=host-${host}`)
 
   check(res, { 'status was 200': (r) => r.status == 200 });
+  check(res.json(), { 'retrieved alerts list': (r) => r.data.length > 0 });
 
   sleep(0.3)
 }

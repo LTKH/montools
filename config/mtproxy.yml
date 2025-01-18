@@ -18,7 +18,7 @@ upstreams:
           - "/influx/write"
         url_prefix:
           - "http://127.0.0.1:8428"
-          - "http://127.0.0.1:8429"
+          #- "http://127.0.0.1:8429"
         health_check: "/health"
   #- listen_addr: "127.0.0.1:7101"
   #  url_map:
