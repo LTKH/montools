@@ -36,6 +36,13 @@ var (
         },
         []string{"listen_addr","user","code"},
     )
+    sizeBytesTotal = prometheus.NewCounterVec(
+        prometheus.CounterOpts{
+            Name: "mtproxy_http_size_bytes_total",
+            Help: "",
+        },
+        []string{"listen_addr","url_path","object"},
+    )
     sizeBytesBucket = prometheus.NewGaugeVec(
         prometheus.GaugeOpts{
             Name: "mtproxy_http_size_bytes_avg",
@@ -209,7 +216,7 @@ func getPrefixURL(prefix []*config.URLPrefix) *config.URLPrefix {
     return urlPrefix
 }
 
-func readData(r *http.Request) ([]byte, error) {
+func readData(r *http.Request) (map[string][]string, []byte, error) {
     var reader io.ReadCloser
     var err error
 
@@ -217,8 +224,10 @@ func readData(r *http.Request) ([]byte, error) {
     if r.Header.Get("Content-Encoding") == "gzip" {
         reader, err = gzip.NewReader(r.Body)
         if err != nil {
-            return nil, err
+            return r.Header, nil, err
         }
+        delete(r.Header, "Content-Encoding")
+        delete(r.Header, "Content-Length")
         defer reader.Close()
     } else {
         reader = r.Body
@@ -227,36 +236,54 @@ func readData(r *http.Request) ([]byte, error) {
 
     data, err := ioutil.ReadAll(reader)
     if err != nil {
-        return nil, err
+        return r.Header, nil, err
     }
 
-    return data, nil
+    return r.Header, data, nil
 }
 
-func (api *API) NewRequest(r *http.Request, url string, data io.Reader) ([]byte, int, error) {
+func (api *API) NewRequest(r *http.Request, url string, data io.Reader) ([]byte, map[string][]string, int, error) {
     req, err := http.NewRequest(r.Method, url, data)
     if err != nil {
-        return nil, 400, err
+        return nil, nil, 400, err
     }
-    if r.Header.Get("Content-Type") != "" {
-        req.Header.Set("Content-Type", r.Header.Get("Content-Type"))
-    }
-    if r.URL.RawQuery != "" {
-        req.URL.RawQuery = r.URL.RawQuery
-    }
+
+    //if r.Method == "GET" && len(r.Header) > 0 {
+    //    log.Print("-------------------------------------------")
+    //    for key, val := range r.Header {
+    //        log.Printf("Header: %v - %v", key, val)
+    //    }
+    //}
+    //delete(r.Header, "Pragma")
+    //delete(r.Header, "Sec-Ch-Ua-Platform")
+    //delete(r.Header, "X-Forwarded-For")
+    //delete(r.Header, "X-Grafana-Org-Id")
+    //delete(r.Header, "Accept")
+    //delete(r.Header, "User-Agent")
+    //delete(r.Header, "Sec-Ch-Ua")
+    //delete(r.Header, "Accept-Encoding")
+    req.Header = r.Header
+    req.URL.RawQuery = r.URL.RawQuery
 
     resp, err := api.Client.Do(req)
     if err != nil {
-        return nil, 503, err
+        return nil, nil, 503, err
     }
     defer resp.Body.Close()
 
+    //if r.Method == "GET" {
+    //    log.Print("-------------------------------------------")
+    //    for key, val := range resp.Header {
+    //        log.Printf("Header: %v - %v", key, val)
+    //    }
+    //}
+
     body, err := io.ReadAll(resp.Body)
     if err != nil {
-        return nil, 400, err
+        return nil, nil, 400, err
     }
 
-    return body, resp.StatusCode, nil
+    return body, resp.Header, resp.StatusCode, nil
 }
 
 func (api *API) HealthCheck(w http.ResponseWriter, r *http.Request){
@@ -280,17 +307,21 @@ func (api *API) ReverseProxy(w http.ResponseWriter, r *http.Request) {
     username, password, auth := r.BasicAuth()
 
     // Get request body
-    data, err := readData(r)
+    header, data, err := readData(r)
     if err != nil {
         log.Printf("[error] %v - %s", err, r.URL.Path)
         requestTotal.With(prometheus.Labels{"listen_addr": api.Upstream.ListenAddr, "user": username, "code": "400"}).Inc()
         w.WriteHeader(400)
         return
     }
+    r.Header = header
 
     // Get a limit for an object
     object := r.Header.Get(api.Upstream.ObjectHeader)
-    item := api.Objects.Set(object, r.URL.Path, float64(len(data)))
+    if object == "" { object = "unknown" }
+    size := float64(len(data))
+    item := api.Objects.Set(object, r.URL.Path, size)
+    sizeBytesTotal.With(prometheus.Labels{"listen_addr": api.Upstream.ListenAddr, "url_path": r.URL.Path, "object": object}).Add(size)
 
     // Checking the size limit
     if api.Upstream.SizeLimit > 0 {
@@ -334,7 +365,7 @@ func (api *API) ReverseProxy(w http.ResponseWriter, r *http.Request) {
                     urlPrefix.Requests <- 1
                 }
 
-                body, code, err := api.NewRequest(r, urlPrefix.URL+r.URL.Path, bytes.NewReader(data))
+                body, header, code, err := api.NewRequest(r, urlPrefix.URL+r.URL.Path, bytes.NewReader(data))
                 if err != nil {
                     log.Printf("[error] %v - %s", err, r.URL.Path)
                     requestTotal.With(prometheus.Labels{"listen_addr": api.Upstream.ListenAddr, "user": username, "code": strconv.Itoa(code)}).Inc()
@@ -349,6 +380,17 @@ func (api *API) ReverseProxy(w http.ResponseWriter, r *http.Request) {
                 requestTotal.With(prometheus.Labels{"listen_addr": api.Upstream.ListenAddr, "user": username, "code": strconv.Itoa(code)}).Inc()
                 if code >= 400 && code < 500 {
                     log.Printf("[warn] %v", string(body))
+                }
+
+                // Set header values
+                for key, val := range header {
+                    for k, v := range val {
+                        if k == 0 { 
+                            w.Header().Set(key, v) 
+                        } else { 
+                            w.Header().Add(key, v) 
+                        }
+                    }
                 }
                 w.WriteHeader(code)
                 w.Write(body)
@@ -405,7 +447,7 @@ func main() {
                                 Method: "GET",
                                 URL: &url.URL{RawQuery: ""},
                             }
-                            _, code, err := api.NewRequest(r, urlPrefix.URL+urlMap.HealthCheck, nil)
+                            _, _, code, err := api.NewRequest(r, urlPrefix.URL+urlMap.HealthCheck, nil)
                             if err != nil || code >= 300 {
                                 if len(urlPrefix.Health) < 5 {
                                     urlPrefix.Health <- 1
@@ -440,6 +482,7 @@ func main() {
 
     go func(){
         prometheus.MustRegister(requestTotal)
+        prometheus.MustRegister(sizeBytesTotal)
         prometheus.MustRegister(sizeBytesBucket)
         prometheus.MustRegister(healthCheckFailed)
 
