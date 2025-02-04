@@ -31,7 +31,7 @@ import (
 var (
     requestTotal = prometheus.NewCounterVec(
         prometheus.CounterOpts{
-            Name: "mtproxy_http_request_total",
+            Name: "mtproxy_http_requests_total",
             Help: "",
         },
         []string{"listen_addr","user","code"},
@@ -53,6 +53,13 @@ var (
     healthCheckFailed = prometheus.NewGaugeVec(
         prometheus.GaugeOpts{
             Name: "mtproxy_health_check_failed",
+            Help: "",
+        },
+        []string{"target_url"},
+    )
+    upstreamRequests = prometheus.NewGaugeVec(
+        prometheus.GaugeOpts{
+            Name: "mtproxy_upstream_requests_count",
             Help: "",
         },
         []string{"target_url"},
@@ -131,6 +138,9 @@ func (o *Objects) Items() []string {
 }
 
 func NewAPI(c *config.HttpClient, u *config.Upstream, d bool) (*API, error) {
+    if c.Timeout == 0 {
+        c.Timeout = 5 * time.Second
+    }
     if c.HttpTransport.MaxIdleConnsPerHost == 0 {
         c.HttpTransport.MaxIdleConnsPerHost = 3000
     }
@@ -154,6 +164,7 @@ func NewAPI(c *config.HttpClient, u *config.Upstream, d bool) (*API, error) {
         Upstream: u,
         Objects: &Objects{items: make(map[string]*Object)},
         Client: &http.Client{
+            Timeout: c.Timeout,
             Transport: &http.Transport{
                 MaxIdleConnsPerHost: c.HttpTransport.MaxIdleConnsPerHost,
                 DialContext: (&net.Dialer{
@@ -248,20 +259,6 @@ func (api *API) NewRequest(r *http.Request, url string, data io.Reader) ([]byte,
         return nil, nil, 400, err
     }
 
-    //if r.Method == "GET" && len(r.Header) > 0 {
-    //    log.Print("-------------------------------------------")
-    //    for key, val := range r.Header {
-    //        log.Printf("Header: %v - %v", key, val)
-    //    }
-    //}
-    //delete(r.Header, "Pragma")
-    //delete(r.Header, "Sec-Ch-Ua-Platform")
-    //delete(r.Header, "X-Forwarded-For")
-    //delete(r.Header, "X-Grafana-Org-Id")
-    //delete(r.Header, "Accept")
-    //delete(r.Header, "User-Agent")
-    //delete(r.Header, "Sec-Ch-Ua")
-    //delete(r.Header, "Accept-Encoding")
     req.Header = r.Header
     req.URL.RawQuery = r.URL.RawQuery
 
@@ -270,13 +267,6 @@ func (api *API) NewRequest(r *http.Request, url string, data io.Reader) ([]byte,
         return nil, nil, 503, err
     }
     defer resp.Body.Close()
-
-    //if r.Method == "GET" {
-    //    log.Print("-------------------------------------------")
-    //    for key, val := range resp.Header {
-    //        log.Printf("Header: %v - %v", key, val)
-    //    }
-    //}
 
     body, err := io.ReadAll(resp.Body)
     if err != nil {
@@ -291,7 +281,7 @@ func (api *API) HealthCheck(w http.ResponseWriter, r *http.Request){
 
     for _, urlMap := range api.Upstream.URLMap {
         for _, urlPrefix := range urlMap.URLPrefix {
-            if len(urlPrefix.Health) == 0 {
+            if len(urlPrefix.Health) == 0 && (urlMap.RequestsLimit == 0 || len(urlPrefix.Requests) < urlMap.RequestsLimit) {
                 w.WriteHeader(200)
                 w.Write([]byte("OK"))
                 return
@@ -299,7 +289,7 @@ func (api *API) HealthCheck(w http.ResponseWriter, r *http.Request){
         }
     }
 
-    w.WriteHeader(502)
+    w.WriteHeader(503)
     return
 }
 
@@ -330,7 +320,7 @@ func (api *API) ReverseProxy(w http.ResponseWriter, r *http.Request) {
                 log.Printf("[debug] payload too large (%v) - %v", object, r.URL.Path)
             }
             requestTotal.With(prometheus.Labels{"listen_addr": api.Upstream.ListenAddr, "user": username, "code": "413"}).Inc()
-            w.WriteHeader(413)
+            w.WriteHeader(429)
             return
         }
     }
@@ -367,8 +357,17 @@ func (api *API) ReverseProxy(w http.ResponseWriter, r *http.Request) {
 
                 body, header, code, err := api.NewRequest(r, urlPrefix.URL+r.URL.Path, bytes.NewReader(data))
                 if err != nil {
+                    if len(urlPrefix.Requests) > 0 {
+                        <- urlPrefix.Requests
+                    }
+
                     log.Printf("[error] %v - %s", err, r.URL.Path)
                     requestTotal.With(prometheus.Labels{"listen_addr": api.Upstream.ListenAddr, "user": username, "code": strconv.Itoa(code)}).Inc()
+                    
+                    if api.Upstream.URLMap[mapPath.Index].ErrorCode != 0 {
+                        w.WriteHeader(api.Upstream.URLMap[mapPath.Index].ErrorCode)
+                        return
+                    }
                     w.WriteHeader(code)
                     return
                 }
@@ -459,6 +458,7 @@ func main() {
                                 }
                             }
                             healthCheckFailed.With(prometheus.Labels{"target_url": urlPrefix.URL+urlMap.HealthCheck}).Set(float64(len(urlPrefix.Health)))
+                            upstreamRequests.With(prometheus.Labels{"target_url": urlPrefix.URL}).Set(float64(len(urlPrefix.Requests)))
                             time.Sleep(1 * time.Second)
                         }
                     }(urlPrefix)
@@ -485,6 +485,7 @@ func main() {
         prometheus.MustRegister(sizeBytesTotal)
         prometheus.MustRegister(sizeBytesBucket)
         prometheus.MustRegister(healthCheckFailed)
+        prometheus.MustRegister(upstreamRequests)
 
         mux := http.NewServeMux()
         mux.Handle("/metrics", promhttp.Handler())

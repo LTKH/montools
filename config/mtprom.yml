@@ -1,0 +1,19 @@
+upstreams: 
+  - listen_addr: "127.0.0.1:9090"
+    #type: prometheus
+    source:
+      type: clickhouse
+      addr: ["127.0.0.1:9000"]
+      database: "default"
+      username: "default"
+      password: "password"
+      #dial_timeout: 10s
+      max_execution_time: 60
+      table_names:
+        #- system.errors
+        - metrics.*
+      tables:
+        - name: default
+          label_names: ["name", "label"]
+          value_names: ["value", "c.*", "remote"]
+          timestamp: "timestamp"

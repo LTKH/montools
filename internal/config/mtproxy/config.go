@@ -24,6 +24,7 @@ type Config struct {
 }
 
 type HttpClient struct {
+    Timeout                time.Duration           `yaml:"timeout"`
     HttpTransport          *HttpTransport          `yaml:"transport"`
 }
 
@@ -58,6 +59,8 @@ type URLMap struct {
     Users                  []*UserInfo             `yaml:"users"`
     MapUsers               map[string]string       `yaml:"-"`
     HealthCheck            string                  `yaml:"health_check"`
+    ErrorCode              int                     `yaml:"error_code"`
+    RequestsLimit          int                     `yaml:"requests_limit"`
 }
 
 // URLPrefix represents passed `url_prefix`

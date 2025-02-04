@@ -4,67 +4,60 @@ import (
     "log"
     //"fmt"
     "flag"
-	"time"
+	//"time"
     "net/http"
+    "os"
+    "os/signal"
+    "syscall"
 	"github.com/gorilla/mux"
-	"github.com/ltkh/montools/internal/config"
-    "github.com/ltkh/montools/internal/api/prom"
-	//"github.com/ltkh/montools/internal/api/loki"
+    "github.com/ltkh/montools/internal/api/promql"
+	"github.com/ltkh/montools/internal/config/mtprom"
 )
-
-func getFuncExpr() {
-
-}
 
 func main() {
     // Command-line flag parsing
-    cfFile := flag.String("config.file", "config/mtsources.yml", "config file")
+    cfFile := flag.String("config.file", "config/mtprom.yml", "config file")
     flag.Parse()
 
 	// Loading configuration file
-    cfg, err := config.NewMTSources(*cfFile)
+    cfg, err := config.New(*cfFile)
     if err != nil {
         log.Fatalf("[error] %v", err)
     }
 
     for _, upstream := range cfg.Upstreams {
-		switch upstream.Type {
-			case "prometheus":
-				// Creating Prom API
-				apiProm, err := prom.New(upstream)
-				if err != nil {
-					log.Fatalf("[error] %v", err)
-				}
-				rtr := mux.NewRouter()
-				rtr.HandleFunc("/api/v1/labels", apiProm.ApiLabels)
-				rtr.HandleFunc("/api/v1/label/{name:[^/]+}/values", apiProm.ApiLabelValues)
-				rtr.HandleFunc("/api/v1/query", apiProm.ApiQuery)
-				rtr.HandleFunc("/api/v1/query_range", apiProm.ApiQueryRange)
-				rtr.HandleFunc("/api/v1/query_exemplars", apiProm.ApiQueryExemplars)
-				rtr.HandleFunc("/api/v1/series", apiProm.ApiSeries)
-				rtr.HandleFunc("/api/v1/metadata", apiProm.ApiMetadata)
-				rtr.HandleFunc("/api/v1/rules", apiProm.ApiRules)
-				http.Handle("/", rtr)
-				go func(){
-					err = http.ListenAndServe(upstream.ListenAddr, nil)
-					if err != nil {
-						log.Fatalf("[error] %v", err)
-					}
-				}()
-			case "loki":
-				//mux := http.NewServeMux()
-				//mux.HandleFunc("/loki/api/v1/labels", apiLoki.ApiLabels)
-				//mux.HandleFunc("/loki/api/v1/label/*/values", apiLoki.ApiLabelValues)
-				//mux.HandleFunc("/loki/api/v1/query_range", apiLoki.ApiQueryRange)
-				//mux.HandleFunc("/", apiLoki.ApiLoki)
-				
-				//go func(){
-				//	err = http.ListenAndServe("127.0.0.1:3100", mux)
-				//	if err != nil {
-				//		log.Fatalf("[error] %v", err)
-				//	}
-				//}()
-		}
+        api, err := promql.New(upstream)
+        if err != nil {
+            log.Fatalf("[error] %v", err)
+        }
+        rtr := mux.NewRouter()
+        rtr.HandleFunc("/api/v1/labels", api.ApiLabels)
+        rtr.HandleFunc("/api/v1/label/{name:[^/]+}/values", api.ApiLabelValues)
+        rtr.HandleFunc("/api/v1/query", api.ApiQuery)
+        rtr.HandleFunc("/api/v1/query_range", api.ApiQueryRange)
+        rtr.HandleFunc("/api/v1/query_exemplars", api.ApiQueryExemplars)
+        rtr.HandleFunc("/api/v1/series", api.ApiSeries)
+        rtr.HandleFunc("/api/v1/metadata", api.ApiMetadata)
+        rtr.HandleFunc("/api/v1/rules", api.ApiRules)
+        http.Handle("/", rtr)
+        go func(){
+            err = http.ListenAndServe(upstream.ListenAddr, nil)
+            if err != nil {
+                log.Fatalf("[error] %v", err)
+            }
+        }()
+        //mux := http.NewServeMux()
+        //mux.HandleFunc("/loki/api/v1/labels", apiLoki.ApiLabels)
+        //mux.HandleFunc("/loki/api/v1/label/*/values", apiLoki.ApiLabelValues)
+        //mux.HandleFunc("/loki/api/v1/query_range", apiLoki.ApiQueryRange)
+        //mux.HandleFunc("/", apiLoki.ApiLoki)
+        
+        //go func(){
+        //	err = http.ListenAndServe("127.0.0.1:3100", mux)
+        //	if err != nil {
+        //		log.Fatalf("[error] %v", err)
+        //	}
+        //}()
 	}
 
     //rtr := mux.NewRouter()
@@ -111,9 +104,15 @@ func main() {
 
     //http://localhost:3000/api/datasources/proxy/1/loki/api/v1/query_range?direction=BACKWARD&limit=1144&query=rate(%7Bapp%3D%22alertmanager%22%7D%5B1m%5D)&start=1687657950225000000&end=1687679550225000000&step=20
 
-	// Daemon mode
+	log.Print("[info] mtprod started")
+
+    // Program signal processing
+    c := make(chan os.Signal, 1)
+    signal.Notify(c, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
     for {
-        time.Sleep(600 * time.Second)
+        <-c
+        log.Print("[info] mtprod stopped")
+        os.Exit(0)
     }
 
 }

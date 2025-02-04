@@ -20,8 +20,12 @@ export default function () {
     var min = 25;
 
     for (var i = 0; i < 1000; i++) {
-      var rand = Math.random() * (max - min) + min;
-      data.push(`cpu_usage,host=host-${i},cpu=cpu-total active=${rand}`);
+      var cpu = Math.random() * 75 + 25;
+      var mem = Math.random() * 75 + 25;
+      var swap = Math.random() * 75 + 25;
+      data.push(`cpu_usage,host=host-${i},cpu=cpu-total active=${cpu}`);
+      data.push(`mem_used,host=host-${i} percent=${mem}`);
+      data.push(`swap_used,host=host-${i} percent=${swap}`);
     }
 
     //lines := []string{

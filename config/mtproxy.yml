@@ -9,25 +9,28 @@ http_client:
     response_header_timeout: 15s
 
 upstreams: 
-  - listen_addr: "127.0.0.1:8887"
+  - listen_addr: "127.0.0.1:8888"
     url_map:
       - src_paths:
           - ".*"
         url_prefix:
           - "http://127.0.0.1:8428"
-        health_check: "/health"
-  - listen_addr: "127.0.0.1:8888"
-    #size_limit: 60000
-    #update_stat: 10s
-    url_map:
-      - src_paths:
-          - "/api/v1/write"
-          - "/influx/write"
-          - "/influx/api/v2/write"
-        url_prefix:
-          - "http://127.0.0.1:8428"
-          #- "http://127.0.0.1:8429"
-        health_check: "/health"
+        #health_check: "/health"
+        error_code: 204
+
+
+  #- listen_addr: "127.0.0.1:8888"
+  #  #size_limit: 60000
+  #  #update_stat: 10s
+  #  url_map:
+  #    - src_paths:
+  #        - "/api/v1/write"
+  #        - "/influx/write"
+  #        - "/influx/api/v2/write"
+  #      url_prefix:
+  #        - "http://127.0.0.1:8428"
+  #        #- "http://127.0.0.1:8429"
+  #      health_check: "/health"
   #- listen_addr: "127.0.0.1:7101"
   #  url_map:
   #    - src_paths:

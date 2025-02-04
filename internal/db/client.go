@@ -1,45 +1,29 @@
 package db
 
 import (
+    "time"
     "errors"
-    "github.com/ltkh/montools/internal/config"
-    "github.com/ltkh/montools/internal/db/chouse"
+    "github.com/ltkh/montools/internal/config/mtprom"
+    "github.com/ltkh/montools/internal/db/clickhouse"
     //"github.com/ltkh/montools/internal/db/sqlite3"
     //"github.com/ltkh/montools/internal/db/redis"
 )
 
 type Client interface {
-    //CreateTables() error
     Close() error
-
-    ShowTables() ([]string, error)
-
-    //SaveStatus(records []config.SockTable) error
-    //SaveNetstat(records []config.SockTable) error
-
-    //LoadRecords(args config.RecArgs) ([]config.SockTable, error)
-    //SaveRecords(records []config.SockTable) error
-    //DelRecords(ids []string) error
-
-    //LoadExceptions(args config.ExpArgs) ([]config.Exception, error)
-    //SaveExceptions(records []config.Exception) error
-    //DelExceptions(ids []string) error
     
-    //Healthy() error
-    //LoadUser(login string) (cache.User, error)
-    //SaveUser(user cache.User) error
-    //LoadUsers() ([]cache.User, error)
-    //LoadAlerts() ([]cache.Alert, error)
-    //SaveAlerts(alerts map[string]cache.Alert) error
-    //AddAlert(alert cache.Alert) error
-    //UpdAlert(alert cache.Alert) error
-    //DeleteOldAlerts() (int64, error)
+    Labels(start, end time.Time) ([]string, error)
+    LabelValues(name string, start, end time.Time) ([]string, error)
+    Series(match string, start, end time.Time) ([]map[string]string, error)
+    Query(query string, limit int, time time.Time, timeout time.Duration) ([]config.Result, error)
+    QueryRange(query string, limit int, start, end time.Time, step time.Duration) ([]config.Result, error)
+
 }
 
 func NewClient(config *config.Source) (Client, error) {
     switch config.Type {
         case "clickhouse":
-            return chouse.NewClient(config)
+            return clickhouse.NewClient(config)
     }
     return nil, errors.New("invalid client")
 }
