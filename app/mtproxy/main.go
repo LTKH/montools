@@ -95,7 +95,7 @@ func (o *Objects) Set(object, path string, size float64) *Object {
     if ok {
         o.items[object] = &Object{Timestamp: item.Timestamp, Size: item.Size + size, Avg: item.Avg, UrlPath: path}
     } else {
-        o.items[object] = &Object{Timestamp: time.Now().Unix(), Size: size, Avg: float64(size), UrlPath: path}
+        o.items[object] = &Object{Timestamp: time.Now().Unix(), Size: 0, Avg: float64(0), UrlPath: path}
     }
 
     return o.items[object]
@@ -110,7 +110,7 @@ func (o *Objects) Update(object string) *Object {
     item, ok := o.items[object]
     if ok {
         sec := tsmp - item.Timestamp 
-        if sec > 0 {
+        if sec > 20 {
             avg := item.Size/float64(sec)
             item = &Object{Timestamp: tsmp, Size: 0, Avg: avg, UrlPath: item.UrlPath}
             if avg == 0 {

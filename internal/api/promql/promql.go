@@ -334,6 +334,7 @@ func (api *Prom) ApiQueryRange(w http.ResponseWriter, r *http.Request) {
     if err != nil {
         log.Printf("[error] %v", err)
         w.WriteHeader(500)
+        w.Write(encodeResp(&Resp{Status:"error", Error:err.Error(), Data:make([]int, 0)}))
         return
     }
 
