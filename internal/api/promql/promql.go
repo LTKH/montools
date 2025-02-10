@@ -20,10 +20,7 @@ import (
     "encoding/json"
     "compress/gzip"
     "github.com/gorilla/mux"
-    //"github.com/VictoriaMetrics/metricsql"
     "github.com/prometheus/common/model"
-    //"github.com/prometheus/prometheus/promql"
-    "github.com/prometheus/prometheus/promql/parser"
     "github.com/ltkh/montools/internal/db"
     "github.com/ltkh/montools/internal/config/mtprom"
 )
@@ -53,6 +50,7 @@ var (
 
 type Prom struct {
     db           *db.Client
+    debug        bool
 }
 
 type Resp struct {
@@ -76,50 +74,6 @@ type PromQuery struct {
     VectorSel    string
     Field        string
     PromQuery    []PromQuery
-}
-
-
-func Walk(query PromQuery, node parser.Node) (PromQuery) {
-    fmt.Printf("Walk: %s\n", "-------------------------------")
-    switch n := node.(type) {
-        case *parser.BinaryExpr:
-            query.BinaryExpr = n.Op.String()
-            fmt.Printf("Binary Expression: %s\n", n.Op)
-            query = Walk(query, n.LHS)
-            query = Walk(query, n.RHS)
-        case *parser.AggregateExpr:
-            fmt.Printf("Aggregate Expression: %s\n", n.Op)
-            query.AggrExpr = append(query.AggrExpr, n.Op.String())
-            for _, prom := range query.PromQuery {
-                
-                //query = Walk(prom, n.Expr)
-                fmt.Printf("Vector Selector: %v\n", prom)
-            }
-        case *parser.Call:
-            fmt.Printf("Call: %s\n", n.String())
-            query.CallFunc = n.Func.Name
-            for _, arg := range n.Args {
-                query = Walk(query, arg)
-            }
-        case *parser.VectorSelector:
-            fmt.Printf("Vector Selector: %s\n", n.String())
-            query.VectorSel = n.String()
-        case *parser.MatrixSelector:
-            fmt.Printf("Matrix Selector: %s\n", n.String())
-            query.MatrixSel = n.String()
-            query = Walk(query, n.VectorSelector)
-        case *parser.NumberLiteral:
-            fmt.Printf("Number Literal: %f\n", n.Val)
-        case *parser.StringLiteral:
-            fmt.Printf("String Literal: %s\n", n.Val)
-        case *parser.ParenExpr:
-            fmt.Println("Parentheses")
-            query = Walk(query, n.Expr)
-        default:
-            fmt.Printf("Unknown node type: %T\n", n)
-    }
-
-    return query
 }
 
 func encodeResp(resp *Resp) []byte {
@@ -206,19 +160,15 @@ func parseDuration(s string) (time.Duration, error) {
 }
 
 func New(conf *config.Upstream) (*Prom, error) {
-    conn, err := db.NewClient(conf.Source)
+    conn, err := db.NewClient(conf.Source, conf.Debug)
     if err != nil {
         return &Prom{}, err
     }
-    return &Prom{ db: &conn }, nil
-}
-
-func (api *Prom) ApiProm(w http.ResponseWriter, r *http.Request) {
-    log.Printf(r.URL.Path)
-    w.WriteHeader(204)
+    return &Prom{ db: &conn, debug: conf.Debug }, nil
 }
 
 func (api *Prom) ApiLabels(w http.ResponseWriter, r *http.Request) {
+    if api.debug { log.Printf(r.URL.Path) }
     w.Header().Set("Content-Type", "application/json")
 
     start, err := parseTimeParam(r, "start", MinTime)
@@ -249,6 +199,7 @@ func (api *Prom) ApiLabels(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *Prom) ApiLabelValues(w http.ResponseWriter, r *http.Request) {
+    if api.debug { log.Printf(r.URL.Path) }
     w.Header().Set("Content-Type", "application/json")
 
     start, err := parseTimeParam(r, "start", MinTime)
@@ -279,12 +230,30 @@ func (api *Prom) ApiLabelValues(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *Prom) ApiQuery(w http.ResponseWriter, r *http.Request) {
-    log.Printf(r.URL.Path)
+    if api.debug { log.Printf(r.URL.Path) }
     w.Header().Set("Content-Type", "application/json")
+
+    time, err := parseTimeParam(r, "time", MinTime)
+    if err != nil {
+        log.Printf("[error] %v", err)
+        w.Write(encodeResp(&Resp{Status:"error", Error:err.Error(), Data:make([]int, 0)}))
+        w.WriteHeader(400)
+        return
+    }
+
+    query := strings.Replace(r.FormValue("query"), ".", ":", -1)
+    
+    results, err := db.Client.Query(*api.db, query, 1, time, 0)
+    if err != nil {
+        log.Printf("[error] %v", err)
+        w.WriteHeader(500)
+        w.Write(encodeResp(&Resp{Status:"error", Error:err.Error(), Data:make([]int, 0)}))
+        return
+    }
 
     result := ResultType{
         ResultType: "vector",
-        Result: []config.Result{},
+        Result: results,
     }
 
     w.WriteHeader(200)
@@ -292,7 +261,7 @@ func (api *Prom) ApiQuery(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *Prom) ApiQueryRange(w http.ResponseWriter, r *http.Request) {
-    log.Printf(r.URL.Path)
+    if api.debug { log.Printf(r.URL.Path) }
     w.Header().Set("Content-Type", "application/json")
 
     start, err := parseTimeParam(r, "start", MinTime)
@@ -327,7 +296,6 @@ func (api *Prom) ApiQueryRange(w http.ResponseWriter, r *http.Request) {
 	}
 
     limit := 0
-
     query := strings.Replace(r.FormValue("query"), ".", ":", -1)
 
     results, err := db.Client.QueryRange(*api.db, query, limit, start, end, step)
@@ -348,7 +316,7 @@ func (api *Prom) ApiQueryRange(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *Prom) ApiQueryExemplars(w http.ResponseWriter, r *http.Request) {
-    log.Printf(r.URL.Path)
+    if api.debug { log.Printf(r.URL.Path) }
     w.Header().Set("Content-Type", "application/json")
 
     var labels []string
@@ -376,6 +344,7 @@ func (api *Prom) ApiQueryExemplars(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *Prom) ApiSeries(w http.ResponseWriter, r *http.Request) {
+    if api.debug { log.Printf(r.URL.Path) }
     w.Header().Set("Content-Type", "application/json")
 
     start, err := parseTimeParam(r, "start", MinTime)
@@ -407,14 +376,14 @@ func (api *Prom) ApiSeries(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *Prom) ApiMetadata(w http.ResponseWriter, r *http.Request) {
-    log.Printf(r.URL.Path)
+    if api.debug { log.Printf(r.URL.Path) }
     w.Header().Set("Content-Type", "application/json")
     w.WriteHeader(200)
     w.Write(encodeResp(&Resp{Status:"success", Data:make(map[string]interface{}, 0)}))
 }
 
 func (api *Prom) ApiRules(w http.ResponseWriter, r *http.Request) {
-    log.Printf(r.URL.Path)
+    if api.debug { log.Printf(r.URL.Path) }
     w.Header().Set("Content-Type", "application/json")
     w.WriteHeader(200)
     w.Write(encodeResp(&Resp{Status:"success", Data:make([]int, 0)}))

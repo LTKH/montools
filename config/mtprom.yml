@@ -1,5 +1,6 @@
 upstreams: 
   - listen_addr: "127.0.0.1:9090"
+    #debug: true
     #type: prometheus
     source:
       type: clickhouse
@@ -10,7 +11,7 @@ upstreams:
       #dial_timeout: 10s
       max_execution_time: 60
       table_names:
-        #- system.errors
+        - system.errors
         - metrics.*
       tables:
         - name: default

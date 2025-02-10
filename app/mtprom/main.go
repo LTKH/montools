@@ -10,8 +10,8 @@ import (
     "os/signal"
     "syscall"
 	"github.com/gorilla/mux"
+    "github.com/ltkh/montools/internal/config/mtprom"
     "github.com/ltkh/montools/internal/api/promql"
-	"github.com/ltkh/montools/internal/config/mtprom"
 )
 
 func main() {
@@ -65,44 +65,11 @@ func main() {
     //rtr.HandleFunc("/api/v1/label/{name:[^/]+}/values", apiProm.ApiPromLabelValues)
     //rtr.HandleFunc("/api/v1/query", apiProm.ApiPromQuery)
     //rtr.HandleFunc("/api/v1/query_range", apiProm.ApiPromQueryRange)
-	
-
-    /*
-    test, err := parser.ParseMetricSelector(`dark_kqi.kqi_base_metrics:cnt{service=~"(Service|Self|ServiceTech|MegaLabs)",status!="error"}`)
-    if err != nil {
-        // parse error
-        log.Printf("%v", err)
-    }
-    log.Printf("%v", test)
-    */
-
-	/*
-    expr, err := metricsql.Parse(`{table="dark_kqi.kqi_base_metrics",service=~"(Service|Self|ServiceTech|MegaLabs)",status!="error"}`)
-    if err != nil {
-        // parse error
-        log.Printf("%v", err)
-    }
-    ae, ok := expr.(*metricsql.AggrFuncExpr)
-    if ok {
-        // parse error
-        fmt.Printf("aggr func: name=%s, arg=%s, modifier=%s\n", ae.Name, ae.Args[0].AppendString(nil), ae.Modifier.AppendString(nil))
-        for _, arg := range ae.Args {
-            log.Printf("%v", arg)
-        }
-    }
-
-    me, ok := expr.(*metricsql.MetricExpr)
-    if ok {
-        log.Printf("me: %v", me.LabelFilters)
-    }
-	*/
     
 
     // Now expr contains parsed MetricsQL as `*Expr` structs.
     // See Parse examples for more details.
     //log.Printf("%v", expr)
-
-    //http://localhost:3000/api/datasources/proxy/1/loki/api/v1/query_range?direction=BACKWARD&limit=1144&query=rate(%7Bapp%3D%22alertmanager%22%7D%5B1m%5D)&start=1687657950225000000&end=1687679550225000000&step=20
 
 	log.Print("[info] mtprod started")
 

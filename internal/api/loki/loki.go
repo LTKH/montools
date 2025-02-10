@@ -13,7 +13,7 @@ import (
     //"regexp"
     //"io/ioutil"
     "encoding/json"
-	"github.com/grafana/loki/pkg/logql"
+	//"github.com/grafana/loki/pkg/logql"
 )
 
 /*

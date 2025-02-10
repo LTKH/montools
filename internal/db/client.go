@@ -20,10 +20,10 @@ type Client interface {
 
 }
 
-func NewClient(config *config.Source) (Client, error) {
+func NewClient(config *config.Source, debug bool) (Client, error) {
     switch config.Type {
         case "clickhouse":
-            return clickhouse.NewClient(config)
+            return clickhouse.NewClient(config, debug)
     }
     return nil, errors.New("invalid client")
 }

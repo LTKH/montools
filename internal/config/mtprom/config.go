@@ -25,6 +25,7 @@ type Config struct {
 type Upstream struct {
     ListenAddr             string                  `yaml:"listen_addr"`
     Source                 *Source                 `yaml:"source"`
+    Debug                  bool                    `yaml:"debug"`
 }
 
 type Source struct {

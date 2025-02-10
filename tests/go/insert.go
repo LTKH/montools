@@ -31,3 +31,7 @@ func main() {
 	}
     
 }
+
+//SELECT sum(value) AS value, timestamp, label FROM (SELECT any(`value`) AS value, toStartOfInterval(timestamp, toIntervalSecond(15)) AS timestamp, * FROM `metrics`.`test001` GROUP BY timestamp, * ORDER BY timestamp ASC WITH FILL STEP toIntervalSecond(15) INTERPOLATE (label, value)) GROUP BY timestamp, label
+//SELECT any(`value`) AS value, toStartOfInterval(timestamp, toIntervalSecond(15)) AS timestamp, * FROM `metrics`.`test001` GROUP BY timestamp, * ORDER BY timestamp ASC WITH FILL STEP toIntervalSecond(15) INTERPOLATE (label, value) LIMIT 5
+//SELECT any(`value`) AS value, timestamp, * FROM `metrics`.`test001` GROUP BY timestamp, * ORDER BY timestamp ASC WITH FILL STEP toIntervalSecond(15) INTERPOLATE (label, value) LIMIT 5
