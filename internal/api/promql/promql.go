@@ -146,17 +146,17 @@ func parseTime(s string) (time.Time, error) {
 }
 
 func parseDuration(s string) (time.Duration, error) {
-	if d, err := strconv.ParseFloat(s, 64); err == nil {
-		ts := d * float64(time.Second)
-		if ts > float64(math.MaxInt64) || ts < float64(math.MinInt64) {
-			return 0, fmt.Errorf("cannot parse %q to a valid duration. It overflows int64", s)
-		}
-		return time.Duration(ts), nil
-	}
-	if d, err := model.ParseDuration(s); err == nil {
-		return time.Duration(d), nil
-	}
-	return 0, fmt.Errorf("cannot parse %q to a valid duration", s)
+    if d, err := strconv.ParseFloat(s, 64); err == nil {
+        ts := d * float64(time.Second)
+        if ts > float64(math.MaxInt64) || ts < float64(math.MinInt64) {
+            return 0, fmt.Errorf("cannot parse %q to a valid duration. It overflows int64", s)
+        }
+        return time.Duration(ts), nil
+    }
+    if d, err := model.ParseDuration(s); err == nil {
+        return time.Duration(d), nil
+    }
+    return 0, fmt.Errorf("cannot parse %q to a valid duration", s)
 }
 
 func New(conf *config.Upstream) (*Prom, error) {
@@ -280,20 +280,20 @@ func (api *Prom) ApiQueryRange(w http.ResponseWriter, r *http.Request) {
     }
 
     step, err := parseDuration(r.FormValue("step"))
-	if err != nil {
+    if err != nil {
         log.Printf("[error] %v", err)
         w.Write(encodeResp(&Resp{Status:"error", Error:err.Error(), Data:make([]int, 0)}))
         w.WriteHeader(400)
         return
-	}
+    }
 
-	if step <= 0 {
+    if step <= 0 {
         err := errors.New("zero or negative query resolution step widths are not accepted. Try a positive integer")
         log.Printf("[error] %v", err)
         w.Write(encodeResp(&Resp{Status:"error", Error:err.Error(), Data:make([]int, 0)}))
         w.WriteHeader(400)
         return
-	}
+    }
 
     limit := 0
     query := strings.Replace(r.FormValue("query"), ".", ":", -1)

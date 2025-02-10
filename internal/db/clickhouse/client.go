@@ -53,12 +53,12 @@ func NewClient(conf *config.Source, debug bool) (*Client, error) {
     conn, err := client.Open(&client.Options{
         Addr: conf.Addr,
         Auth: client.Auth{
-			Database: conf.Database,
-			Username: conf.Username,
-			Password: conf.Password,
-		},
+            Database: conf.Database,
+            Username: conf.Username,
+            Password: conf.Password,
+        },
         Settings: client.Settings{
-        	"max_execution_time": conf.MaxExecutionTime,
+            "max_execution_time": conf.MaxExecutionTime,
         },
         //DialTimeout: time.Second * conf.DialTimeout,
         Compression: &client.Compression{
@@ -66,9 +66,9 @@ func NewClient(conf *config.Source, debug bool) (*Client, error) {
         },
         Protocol:  client.HTTP,
     })
-	if err != nil {
-		return &Client{}, err
-	}
+    if err != nil {
+        return &Client{}, err
+    }
 
     cache := Tables{
         Items: make(map[string]Items),
@@ -457,25 +457,25 @@ func (db *Client) VectorSelector(labs []*labels.Matcher, lmt int) (string, error
 func (db *Client) QueryWalk(node parser.Node, limit int) (string, error) {
     //fmt.Printf("Walk: %s\n", "-------------------------------")
     switch n := node.(type) {
-	    case *parser.BinaryExpr:
+        case *parser.BinaryExpr:
             //fmt.Printf("Binary Expression: %s\n", n.Op)
             return db.BinaryExpr(n.Op.String(), n.LHS, n.RHS)
-		case *parser.AggregateExpr:
-			//fmt.Printf("Aggregate Expression: %s\n", n.Op)
+        case *parser.AggregateExpr:
+            //fmt.Printf("Aggregate Expression: %s\n", n.Op)
             //fmt.Printf("Grouping - %v\n", n.Grouping)
-			//Walk(query, n.Expr)
+            //Walk(query, n.Expr)
             return db.AggregateExpr(n.Op.String(), n.Grouping, n.Expr)
-		case *parser.Call:
+        case *parser.Call:
             return "", fmt.Errorf("unsupported function: %v", n.Func.Name)
-			//fmt.Printf("Function: %s\n", n.Func.Name)
-			//for _, arg := range n.Args {
+            //fmt.Printf("Function: %s\n", n.Func.Name)
+            //for _, arg := range n.Args {
             //    Walk(query, arg)
             //}
-		case *parser.MatrixSelector:
-			fmt.Printf("Matrix: %s\n", n.String())
-			//Walk(query, n.VectorSelector)
-		case *parser.VectorSelector:
-			//fmt.Printf("Vector: %s\n", n.String())
+        case *parser.MatrixSelector:
+            fmt.Printf("Matrix: %s\n", n.String())
+            //Walk(query, n.VectorSelector)
+        case *parser.VectorSelector:
+            //fmt.Printf("Vector: %s\n", n.String())
             //fmt.Printf("label - %v\n", n.LabelMatchers)
             return db.VectorSelector(n.LabelMatchers, limit)
         //case *parser.NumberLiteral:

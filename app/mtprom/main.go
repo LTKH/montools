@@ -4,12 +4,12 @@ import (
     "log"
     //"fmt"
     "flag"
-	//"time"
+    //"time"
     "net/http"
     "os"
     "os/signal"
     "syscall"
-	"github.com/gorilla/mux"
+    "github.com/gorilla/mux"
     "github.com/ltkh/montools/internal/config/mtprom"
     "github.com/ltkh/montools/internal/api/promql"
 )
@@ -19,7 +19,7 @@ func main() {
     cfFile := flag.String("config.file", "config/mtprom.yml", "config file")
     flag.Parse()
 
-	// Loading configuration file
+    // Loading configuration file
     cfg, err := config.New(*cfFile)
     if err != nil {
         log.Fatalf("[error] %v", err)
@@ -53,15 +53,15 @@ func main() {
         //mux.HandleFunc("/", apiLoki.ApiLoki)
         
         //go func(){
-        //	err = http.ListenAndServe("127.0.0.1:3100", mux)
-        //	if err != nil {
-        //		log.Fatalf("[error] %v", err)
-        //	}
+        //    err = http.ListenAndServe("127.0.0.1:3100", mux)
+        //    if err != nil {
+        //        log.Fatalf("[error] %v", err)
+        //    }
         //}()
-	}
+    }
 
     //rtr := mux.NewRouter()
-	//rtr.HandleFunc("/api/v1/labels", apiProm.ApiPromLabels)
+    //rtr.HandleFunc("/api/v1/labels", apiProm.ApiPromLabels)
     //rtr.HandleFunc("/api/v1/label/{name:[^/]+}/values", apiProm.ApiPromLabelValues)
     //rtr.HandleFunc("/api/v1/query", apiProm.ApiPromQuery)
     //rtr.HandleFunc("/api/v1/query_range", apiProm.ApiPromQueryRange)
@@ -71,7 +71,7 @@ func main() {
     // See Parse examples for more details.
     //log.Printf("%v", expr)
 
-	log.Print("[info] mtprod started")
+    log.Print("[info] mtprod started")
 
     // Program signal processing
     c := make(chan os.Signal, 1)
