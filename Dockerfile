@@ -19,4 +19,4 @@ EXPOSE 8010
 COPY --from=builder /bin/${app_name} /bin/mtproxy
 
 ENTRYPOINT ["/bin/mtproxy"]
-CMD ["-httpListenAddr={http_listen_addr}"]
+CMD ["-listen.client-address={http_listen_addr}"]

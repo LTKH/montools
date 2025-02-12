@@ -225,6 +225,10 @@ func (api *Prom) ApiLabelValues(w http.ResponseWriter, r *http.Request) {
         return
     }
 
+    if len(labels) == 0 {
+        labels = make([]string, 0)
+    }
+
     w.WriteHeader(200)
     w.Write(encodeResp(&Resp{Status:"success", Data:labels}))
 }
@@ -369,6 +373,10 @@ func (api *Prom) ApiSeries(w http.ResponseWriter, r *http.Request) {
         log.Printf("[error] %v", err)
         w.WriteHeader(500)
         return
+    }
+
+    if len(series) == 0 {
+        series = make([]map[string]string, 0)
     }
 
     w.WriteHeader(200)

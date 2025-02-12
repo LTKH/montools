@@ -16,15 +16,15 @@ import (
     "strings"
     "reflect"
     "encoding/json"
-    //"database/sql"
-    client "github.com/ClickHouse/clickhouse-go/v2"
+    "database/sql"
+    ch "github.com/ClickHouse/clickhouse-go/v2"
     "github.com/ltkh/montools/internal/config/mtprom"
     "github.com/prometheus/prometheus/model/labels"
     "github.com/prometheus/prometheus/promql/parser"
 )
 
 type Client struct {
-    client client.Conn
+    client *sql.DB
     config *config.Source
     tables Tables
     debug bool
@@ -32,49 +32,59 @@ type Client struct {
 
 type Tables struct {
     sync.RWMutex
-    Items map[string]Items
+    Items map[string]Item
 }
 
-type Items struct {
-    Labels map[string]bool
-    Values map[string]bool
+type Item struct {
+    Labels map[string]string
+    Values map[string]string
+    Times  map[string]string
 }
 
 type Selector struct {
-    Values []string
-    Labels []string
+    DBase  string
+    Table  string
+    Name   string
+    Value  string
     Fields []string
-    Params client.Parameters
-    Timestamp string
+    Values map[string]string
+    Labels map[string]string
+    Times  map[string]string
     Conditions []string
 }
 
 func NewClient(conf *config.Source, debug bool) (*Client, error) {
-    conn, err := client.Open(&client.Options{
+    conn := ch.OpenDB(&ch.Options{
         Addr: conf.Addr,
-        Auth: client.Auth{
+        Auth: ch.Auth{
             Database: conf.Database,
             Username: conf.Username,
             Password: conf.Password,
         },
-        Settings: client.Settings{
+        Settings: ch.Settings{
             "max_execution_time": conf.MaxExecutionTime,
         },
         //DialTimeout: time.Second * conf.DialTimeout,
-        Compression: &client.Compression{
-            Method: client.CompressionLZ4,
+        Compression: &ch.Compression{
+            Method: ch.CompressionLZ4,
         },
-        Protocol:  client.HTTP,
+        Protocol:  ch.HTTP,
     })
-    if err != nil {
-        return &Client{}, err
-    }
 
     cache := Tables{
-        Items: make(map[string]Items),
+        Items: make(map[string]Item),
     }
 
-    return &Client{ client: conn, config: conf, tables: cache, debug: debug }, nil
+    db := &Client{ client: conn, config: conf, tables: cache, debug: debug }
+
+    go func(){
+        for {
+            db.SetColumns(conf.DBaseNames, conf.TableNames)
+            time.Sleep(600 * time.Second)
+        }
+    }()
+
+    return db, nil
 }
 
 func inArray(value string, array []string) bool {
@@ -96,10 +106,100 @@ func inArray(value string, array []string) bool {
     return false
 }
 
+func mapKeys(items map[string]string) []string {
+    keys := []string{}
+
+    for k, _ := range items {
+        keys = append(keys, k)
+    }
+
+    return keys
+}
+
 func getHash(text string) string {
     h := sha1.New()
     io.WriteString(h, text)
     return hex.EncodeToString(h.Sum(nil))
+}
+
+func (tb *Tables) Set(key string, labels, values, times map[string]string) error {
+    tb.Lock()
+    defer tb.Unlock()
+
+    val, found := tb.Items[key]
+    if !found {
+        val = Item{
+            Labels: map[string]string{},
+            Values: map[string]string{},
+            Times:  map[string]string{},
+        }
+    }
+
+    for k, v := range labels {
+        val.Labels[k] = v
+    }
+    for k, v := range values {
+        val.Values[k] = v
+    }
+    for k, v := range times {
+        val.Times[k] = v
+    }
+    
+    tb.Items[key] = val
+
+    return nil
+}
+
+func (tb *Tables) Get(key string) (Item, bool) {
+    tb.RLock()
+    defer tb.RUnlock()
+
+    val, found := tb.Items[key]
+    if !found {
+        return Item{}, false
+    }
+
+    return val, true
+}
+
+func (tb *Tables) Values(name string) []string {
+    tb.RLock()
+    defer tb.RUnlock()
+
+    var items []string
+
+    for key, val := range tb.Items {
+        if len(val.Times) > 0 {
+            for v, _ := range val.Values {
+                if name != "" && name != v { continue }
+                items = append(items, fmt.Sprintf("%s:%s", key, v))
+            }
+        }
+    }
+
+    return items
+}
+
+func (tb *Tables) Labels() []string {
+    tb.RLock()
+    defer tb.RUnlock()
+
+    var items []string
+
+    for key, val := range tb.Items {
+        if len(val.Times) == 0 {
+            continue
+        }
+        //if len(val.Values) == 0 {
+        //    continue
+        //    val.Values["count"] = "Custom"
+        //}
+        for v, _ := range val.Labels {
+            items = append(items, fmt.Sprintf("%s:%s", key, v))
+        }
+    }
+
+    return items
 }
 
 func (db *Client) Close() error {
@@ -108,22 +208,104 @@ func (db *Client) Close() error {
     return nil
 }
 
-func (db *Client) NewSelector(labs []*labels.Matcher) (Selector, error) {
+func (db *Client) GetTable(name string) *config.Table {
+    for _, tab := range db.config.Tables {
+        if m, _ := regexp.MatchString("^"+tab.Name+"$", name); m {
+            return tab
+        }
+    }
+
+    return &config.Table{}
+}
+
+func (db *Client) SetColumns(dbaseNames, tableNames []string) error {
+    if len(dbaseNames) == 0 {
+        dbaseNames = append(dbaseNames, ".*")
+    }
+
+    if len(tableNames) == 0 {
+        tableNames = append(tableNames, ".*")
+    }
+
+    rows, err := db.client.QueryContext(
+        context.Background(), 
+        "SELECT database, table, name, type FROM system.columns WHERE match(database, @dbase) AND match(table, @table)",
+        sql.Named("dbase", fmt.Sprintf("^(%s)$", strings.Join(dbaseNames, "|"))),
+        sql.Named("table", fmt.Sprintf("^(%s)$", strings.Join(tableNames, "|"))),
+    )
+    if err != nil {
+        log.Printf("[error] read table system.columns: %v", err)
+        return err
+    }
+    defer rows.Close()
+
+    for rows.Next() {
+        var (
+            dbase string
+            table string
+            fname string
+            ftype string
+        )
+
+        if err := rows.Scan(&dbase, &table, &fname, &ftype); err != nil {
+            return err
+        }
+
+        id := fmt.Sprintf("%s:%s", dbase, table)
+        tb := db.GetTable(id)
+
+        if len(tb.LabelTypes) == 0 {
+            tb.LabelTypes = []string{"String"}
+        }
+
+        if len(tb.ValueTypes) == 0 {
+            tb.ValueTypes = []string{"Int.*","Float.*"}
+        }
+
+        if len(tb.TimesTypes) == 0 {
+            tb.TimesTypes = []string{"DateTime"}
+        }
+
+        labels := map[string]string{}
+        values := map[string]string{}
+        times  := map[string]string{}
+
+        if inArray(ftype, tb.LabelTypes) && inArray(fname, tb.LabelNames) {
+            labels[fname] = ftype
+        }
+        if inArray(ftype, tb.ValueTypes) && inArray(fname, tb.ValueNames) {
+            values[fname] = ftype
+        }
+        if inArray(ftype, tb.TimesTypes) && inArray(fname, tb.TimesNames) {
+            times[fname] = ftype
+        }
+
+        db.tables.Set(id, labels, values, times)
+    }
+
+    return nil
+}
+
+func (db *Client) NewSelector(dbase, table string, labs []*labels.Matcher) (Selector, error) {
     selector := Selector{
-        Labels: []string{},
+        DBase: dbase,
+        Table: table,
+        Name:  "1",
         Fields: []string{},
-        Params: client.Parameters{},
+        Values: map[string]string{},
+        Labels: map[string]string{},
+        Times:  map[string]string{},
         Conditions: []string{},
-        Timestamp: "",
+        
     }
 
     for _, l := range labs {
         if l.Name == "__name__" {
+            selector.Name = l.Value
             vals := strings.Split(l.Value, ":")
-            selector.Params["__name__"] = l.Value
-            if len(vals) > 0 { selector.Params["dbase"] = vals[0] }
-            if len(vals) > 1 { selector.Params["table"] = vals[1] }
-            if len(vals) > 2 { selector.Params["value"] = vals[2] }
+            if len(vals) > 0 { selector.DBase = vals[0] }
+            if len(vals) > 1 { selector.Table = vals[1] }
+            if len(vals) > 2 { selector.Value = vals[2] }
         } else {
             switch l.Type {
                 case labels.MatchEqual:
@@ -139,156 +321,113 @@ func (db *Client) NewSelector(labs []*labels.Matcher) (Selector, error) {
         }
     }
 
-    if _, ok := selector.Params["dbase"]; ok == false {
+    if selector.DBase == "" {
         return selector, fmt.Errorf("failed to determine target data base")
     }
-    if _, ok := selector.Params["table"]; ok == false {
+    if selector.Table == "" {
         return selector, fmt.Errorf("failed to determine target table")
     }
 
-    for _, table := range db.config.Tables {
-        matched, err := regexp.MatchString("^"+table.Name+"$", fmt.Sprintf("%s.%s", selector.Params["dbase"]))
-        if err != nil {
-            return selector, err
-        }
-        if matched {
-            selector.Values = table.ValueNames
-            selector.Labels = table.LabelNames
-            selector.Timestamp = table.Timestamp
-            return selector, nil
-        }
+    id := fmt.Sprintf("%s:%s", selector.DBase, selector.Table)
+    item, ok := db.tables.Get(id)
+
+    if !ok {
+        return selector, fmt.Errorf("unable to get table attributes: %s.%s", selector.DBase, selector.Table)
     }
 
-    chCtx := client.Context(context.Background(), client.WithParameters(selector.Params))
-
-    rows, err := db.client.Query(chCtx, "SELECT * FROM {dbase:Identifier}.{table:Identifier} LIMIT 1")
-    if err != nil {
-        return selector, err
+    for k, v := range item.Labels {
+        selector.Labels[k] = v
     }
-    defer rows.Close()
-
-    for _, ctype := range rows.ColumnTypes() {
-        switch ctype.DatabaseTypeName() {
-            case "Float32", "Float64", "Int32", "Int64":
-                selector.Values = append(selector.Values, ctype.Name())
-            case "String": 
-                selector.Labels = append(selector.Labels, ctype.Name())
-            case "DateTime":
-                selector.Timestamp = ctype.Name()
-        }
+    for k, v := range item.Values {
+        selector.Values[k] = v
+    }
+    for k, v := range item.Times {
+        selector.Times[k] = v
+        break
     }
 
     if len(selector.Values) == 0 {
-        return selector, fmt.Errorf("unable to find value field in table: ", selector.Params["table"])
+        return selector, fmt.Errorf("unable to find value field in table: %s.%s", selector.DBase, selector.Table)
     }
-    if selector.Timestamp == "" {
-        return selector, fmt.Errorf("unable to find date field in table: ", selector.Params["table"])
+    if len(selector.Times) == 0 {
+        return selector, fmt.Errorf("unable to find date field in table: %s.%s", selector.DBase, selector.Table)
     }
 
     return selector, nil
 }
 
 func (db *Client) LabelValues(name string, start, end time.Time) ([]string, error) {
-    var values []string
+    var results []string
 
-    dbs, err := db.client.Query(context.Background(), "SHOW DATABASES")
-    if err != nil {
-        return values, err
-    }
-    defer dbs.Close()
+    labs := make(map[string]bool)
 
-    for dbs.Next() {
-        var dbase string
-        if err := dbs.Scan(&dbase); err != nil {
-            return values, err
+    if name == "" {
+
+        for _, val := range db.tables.Labels() {
+            v := strings.Split(val, ":")
+            if len(v) != 3 { continue }
+            labs[v[2]] = true
+        }
+        for key, _ := range labs {
+            results = append(results, key)
         }
 
-        dbCtx := client.Context(context.Background(), client.WithParameters(client.Parameters{
-            "dbase": dbase,
-        }))
-        tbs, err := db.client.Query(dbCtx, "SHOW TABLES FROM {dbase:Identifier}")
-        if err != nil {
-            return values, err
+    } else if name == "__name__" {
+    
+        /*
+        if err := db.SetColumns(db.config.DBaseNames, db.config.TableNames); err != nil {
+            return results, err
         }
-        defer tbs.Close()
+        */
 
-        for tbs.Next() {
-            qlabels := make(map[string]bool)
+        results = db.tables.Values("")
 
-            var table string
-            if err := tbs.Scan(&table); err != nil {
-                return values, err
-            }
+    } else {
+        
+        for _, val := range db.tables.Values(name) {
+            v := strings.Split(val, ":")
+            if len(v) != 3 { continue }
 
-            if !inArray(fmt.Sprintf("%v.%v", dbase, table), db.config.TableNames) {
-                continue
-            }
+            item, ok := db.tables.Get(fmt.Sprintf("%s:%s", v[0], v[1]))
+            if !ok { continue }
 
-            selector, err := db.NewSelector([]*labels.Matcher{&labels.Matcher{Name: "__name__",Value: fmt.Sprintf("%s:%s", dbase, table)}})
+            chCtx := ch.Context(context.Background(), ch.WithParameters(ch.Parameters{}))
+
+            rows, err := db.client.QueryContext(chCtx, 
+                fmt.Sprintf(
+                    "SELECT `%s` FROM `%s`.`%s` WHERE `%s` BETWEEN toDateTime(@start,'UTC') AND toDateTime(@end,'UTC') GROUP BY ALL", 
+                    name, v[0], v[1], mapKeys(item.Times)[0],
+                ),
+                sql.Named("start", start.Format("2006-01-02 15:04:05")),
+                sql.Named("end", end.Format("2006-01-02 15:04:05")),
+            )
             if err != nil {
-                return values, err
-            }
-            selector.Conditions = append(selector.Conditions, fmt.Sprintf("`%s` BETWEEN toDateTime({start:String},'UTC') AND toDateTime({end:String},'UTC')", selector.Timestamp))
-            selector.Params["start"] = start.Format("2006-01-02 15:04:05")
-            selector.Params["end"] = end.Format("2006-01-02 15:04:05")
-
-            chCtx := client.Context(context.Background(), client.WithParameters(selector.Params))
-
-            rows, err := db.client.Query(chCtx, fmt.Sprintf("SELECT * FROM {dbase:Identifier}.{table:Identifier} WHERE %s", strings.Join(selector.Conditions, " AND ")))
-            if err != nil {
-                log.Printf("[error] read table %s: %v", table, err)
+                log.Printf("[error] read table %s: %v", v[1], err)
                 continue
             }
             defer rows.Close()
 
-            columnTypes := rows.ColumnTypes()
-            vars := make([]interface{}, len(columnTypes))
-            for i := range columnTypes {
-                vars[i] = reflect.New(columnTypes[i].ScanType()).Interface()
-            }
-
             for rows.Next() {
-                if err := rows.Scan(vars...); err != nil {
-                    return values, err
+                var value string
+
+                if err := rows.Scan(&value); err != nil {
+                    continue
                 }
 
-                for i, val := range vars {
-                    ctype := columnTypes[i]
-                    if name == "" {
-                        if ctype.DatabaseTypeName() == "String" {
-                            qlabels[ctype.Name()] = true
-                        }
-                    } else if name == "__name__" {
-                        if strings.Contains(ctype.DatabaseTypeName(), "Int") {
-                            qlabels[fmt.Sprintf("%s:%s:%s", dbase, table, ctype.Name())] = true
-                        }
-                        if strings.Contains(ctype.DatabaseTypeName(), "Float") {
-                            qlabels[fmt.Sprintf("%s:%s:%s", dbase, table, ctype.Name())] = true
-                        }
-                    } else {
-                        if name == ctype.Name() && ctype.DatabaseTypeName() == "String" {
-                            switch v := val.(type) {
-                                case *string:
-                                    qlabels[*v] = true
-                            }
-                        }
-                    }
-                }
-
-                if name == "__name__" {
-                    break
+                if value != "" {
+                    labs[value] = true
                 }
             }
+        }
 
-            for key, _ := range qlabels {
-                values = append(values, key)
-            }
+        for key, _ := range labs {
+            results = append(results, key)
         }
     }
 
-    sort.Strings(values)
+    sort.Strings(results)
 
-    return values, nil
+    return results, nil
 }
 
 func (db *Client) Labels(start, end time.Time) ([]string, error) {
@@ -309,188 +448,226 @@ func (db *Client) Series(match string, start, end time.Time) ([]map[string]strin
     }
 
     if db.debug {
-        log.Printf("[series] %v", match)
+        log.Printf("[series] %s", match)
     }
 
     selectors := parser.ExtractSelectors(expr)
     for _, sel := range selectors {
-        columns := "*"
 
-        selector, err := db.NewSelector(sel)
+        selector, err := db.NewSelector("", "", sel)
         if err != nil {
             return series, err
         }
-        selector.Conditions = append(selector.Conditions, fmt.Sprintf("`%s` BETWEEN toDateTime({start:String},'UTC') AND toDateTime({end:String},'UTC')", selector.Timestamp))
-        selector.Params["start"] = start.Format("2006-01-02 15:04:05")
-        selector.Params["end"] = end.Format("2006-01-02 15:04:05")
+        selector.Conditions = append(
+            selector.Conditions, 
+            fmt.Sprintf("`%s` BETWEEN toDateTime(@start,'UTC') AND toDateTime(@end,'UTC')", mapKeys(selector.Times)[0]),
+        )
 
-        if _, ok := selector.Params["__name__"]; ok == false {
+        if selector.Name == "" {
             return series, nil
         }
 
-        if len(selector.Fields) > 0 {
-            columns = strings.Join(selector.Fields, ", ")
-        }
+        if len(selector.Labels) > 0 {
 
-        chCtx := client.Context(context.Background(), client.WithParameters(selector.Params))
-        
-        rows, err := db.client.Query(chCtx, fmt.Sprintf(
-            "SELECT %s FROM {dbase:Identifier}.{table:Identifier} WHERE %s GROUP BY ALL", 
-            columns,
-            strings.Join(selector.Conditions, " AND "),
-        ))
-        if err != nil {
-            log.Printf("[error] read table %s: %v", selector.Params["table"], err)
-            return series, err
-        }
-        defer rows.Close()
+            chCtx := ch.Context(context.Background(), ch.WithParameters(ch.Parameters{}))
 
-        columnTypes := rows.ColumnTypes()
-        vars := make([]interface{}, len(columnTypes))
-        for i := range columnTypes {
-            vars[i] = reflect.New(columnTypes[i].ScanType()).Interface()
-        }
+            query := fmt.Sprintf(
+                "SELECT %s FROM `%s`.`%s` WHERE %s GROUP BY ALL LIMIT 100", 
+                strings.Join(mapKeys(selector.Labels), ", "), 
+                selector.DBase, 
+                selector.Table, 
+                strings.Join(selector.Conditions, " AND "),
+            )
+            if db.debug {
+                log.Printf("[series] %s", query)
+            }
+            
+            rows, err := db.client.QueryContext(
+                chCtx, 
+                query,
+                sql.Named("start", start.Format("2006-01-02 15:04:05")),
+                sql.Named("end", end.Format("2006-01-02 15:04:05")),
+            )
+            if err != nil {
+                log.Printf("[error] read table %s: %v", selector.Table, err)
+                return series, err
+            }
+            defer rows.Close()
 
-        for rows.Next() {
-            if err := rows.Scan(vars...); err != nil {
+            columnTypes, err := rows.ColumnTypes()
+            if err != nil {
                 return series, err
             }
 
-            labels := make(map[string]string)
-            labels["__name__"] = selector.Params["__name__"]
-            
-            for i, val := range vars {
-                ctype := columnTypes[i]
-                if ctype.DatabaseTypeName() == "String" {
-                    labels[ctype.Name()] = reflect.ValueOf(val).Elem().String()
-                }
+            vars := make([]interface{}, len(columnTypes))
+            for i := range columnTypes {
+                vars[i] = reflect.New(columnTypes[i].ScanType()).Interface()
             }
 
-            series = append(series, labels)
+            tb := db.GetTable(fmt.Sprintf("%s:%s", selector.DBase, selector.Table))
+
+            if len(tb.LabelTypes) == 0 {
+                tb.LabelTypes = []string{"String"}
+            }
+
+            for rows.Next() {
+                if err := rows.Scan(vars...); err != nil {
+                    return series, err
+                }
+
+                labels := make(map[string]string)
+                labels["__name__"] = selector.Name
+                
+                for i, val := range vars {
+                    ctype := columnTypes[i]
+                    if inArray(ctype.DatabaseTypeName(), tb.LabelTypes) && inArray(ctype.Name(), tb.LabelNames) {
+                        labels[ctype.Name()] = reflect.ValueOf(val).Elem().String()
+                    }
+                    
+                }
+
+                series = append(series, labels)
+            }
+        }
+
+        if len(series) == 0 {
+            series = append(series, map[string]string{"__name__": selector.Name})
         }
     }
 
     return series, nil
 }
 
-func (db *Client) AggregateExpr(name string, grouping []string, expr parser.Node) (string, error) {
+func (db *Client) AggregateExpr(name string, grouping []string, expr parser.Node) (string, []string, error) {
     grouping = append(grouping, "timestamp")
 
-    sel, err := db.QueryWalk(expr, 0)
+    sel, grouping, err := db.QueryWalk(expr, grouping)
     if err != nil {
-        return "", err
+        return "", grouping, err
     }
 
     switch name {
         case "sum":
-            return fmt.Sprintf("SELECT sum(value) AS value, %[2]s FROM (%[1]s) GROUP BY %[2]s ORDER BY timestamp ASC", sel, strings.Join(grouping, ", ")), nil
+            return fmt.Sprintf("SELECT sum(value) AS value, %[2]s FROM (%[1]s) GROUP BY %[2]s ORDER BY timestamp ASC", sel, strings.Join(grouping, ", ")), grouping, nil
         case "count":
-            return fmt.Sprintf("SELECT count(value) AS value, %[2]s FROM (%[1]s) GROUP BY %[2]s ORDER BY timestamp ASC", sel, strings.Join(grouping, ", ")), nil
+            return fmt.Sprintf("SELECT count(value) AS value, %[2]s FROM (%[1]s) GROUP BY %[2]s ORDER BY timestamp ASC", sel, strings.Join(grouping, ", ")), grouping, nil
         case "min":
-            return fmt.Sprintf("SELECT min(value) AS value, %[2]s FROM (%[1]s) GROUP BY %[2]s ORDER BY timestamp ASC", sel, strings.Join(grouping, ", ")), nil
+            return fmt.Sprintf("SELECT min(value) AS value, %[2]s FROM (%[1]s) GROUP BY %[2]s ORDER BY timestamp ASC", sel, strings.Join(grouping, ", ")), grouping, nil
         case "max":
-            return fmt.Sprintf("SELECT max(value) AS value, %[2]s FROM (%[1]s) GROUP BY %[2]s ORDER BY timestamp ASC", sel, strings.Join(grouping, ", ")), nil
+            return fmt.Sprintf("SELECT max(value) AS value, %[2]s FROM (%[1]s) GROUP BY %[2]s ORDER BY timestamp ASC", sel, strings.Join(grouping, ", ")), grouping, nil
         case "avg":
-            return fmt.Sprintf("SELECT avg(value) AS value, %[2]s FROM (%[1]s) GROUP BY %[2]s ORDER BY timestamp ASC", sel, strings.Join(grouping, ", ")), nil
+            return fmt.Sprintf("SELECT avg(value) AS value, %[2]s FROM (%[1]s) GROUP BY %[2]s ORDER BY timestamp ASC", sel, strings.Join(grouping, ", ")), grouping, nil
     }
 
-    return "", fmt.Errorf("operator not supported by driver: ", name)
+    return "", grouping, fmt.Errorf("operator not supported by driver: ", name)
 }
 
-func (db *Client) BinaryExpr(name string, LHS, RHS parser.Node) (string, error) {
-    selL, err := db.QueryWalk(LHS, 0)
+func (db *Client) BinaryExpr(name string, grouping []string, LHS, RHS parser.Node) (string, []string, error) {
+    selL, _, err := db.QueryWalk(LHS, grouping)
     if err != nil {
-        return "", err
+        return "", []string{}, err
     }
 
-    selR, err := db.QueryWalk(RHS, 0)
+    selR, _, err := db.QueryWalk(RHS, grouping)
     if err != nil {
-        return "", err
+        return "", []string{}, err
     }
 
     switch name {
         case "+":
-            return fmt.Sprintf("SELECT (s1.value + s2.value) AS value, timestamp FROM (%s) AS s1, (%s) AS s2 ORDER BY timestamp ASC", selL, selR), nil
+            return fmt.Sprintf("SELECT (s1.value + s2.value) AS value, timestamp FROM (%s) AS s1, (%s) AS s2 ORDER BY timestamp ASC", selL, selR), []string{}, nil
         case "-":
-            return fmt.Sprintf("SELECT (s1.value - s2.value) AS value, timestamp FROM (%s) AS s1, (%s) AS s2 ORDER BY timestamp ASC", selL, selR), nil
+            return fmt.Sprintf("SELECT (s1.value - s2.value) AS value, timestamp FROM (%s) AS s1, (%s) AS s2 ORDER BY timestamp ASC", selL, selR), []string{}, nil
         case "/":
-            return fmt.Sprintf("SELECT (s1.value / s2.value) AS value, timestamp FROM (%s) AS s1, (%s) AS s2 ORDER BY timestamp ASC", selL, selR), nil
+            return fmt.Sprintf("SELECT (s1.value / s2.value) AS value, timestamp FROM (%s) AS s1, (%s) AS s2 ORDER BY timestamp ASC", selL, selR), []string{}, nil
         case "*":
-            return fmt.Sprintf("SELECT (s1.value * s2.value) AS value, timestamp FROM (%s) AS s1, (%s) AS s2 ORDER BY timestamp ASC", selL, selR), nil
+            return fmt.Sprintf("SELECT (s1.value * s2.value) AS value, timestamp FROM (%s) AS s1, (%s) AS s2 ORDER BY timestamp ASC", selL, selR), []string{}, nil
     }
 
-    return "", nil
+    return "", []string{}, nil
 }
 
-func (db *Client) VectorSelector(labs []*labels.Matcher, lmt int) (string, error) {
-    selector, err := db.NewSelector(labs)
+func (db *Client) VectorSelector(labs []*labels.Matcher, grouping []string) (string, []string, error) {
+
+    selector, err := db.NewSelector("", "", labs)
     if err != nil {
-        return "", err
+        return "", grouping, err
     }
-    selector.Conditions = append(selector.Conditions, fmt.Sprintf("`%s` BETWEEN toDateTime({start:String},'UTC') AND toDateTime({end:String},'UTC')", selector.Timestamp))
-
-    fields := []string{
-        fmt.Sprintf("any(`%s`) AS value", selector.Params["value"]),
-        fmt.Sprintf("toStartOfInterval(`%s`, toIntervalSecond({step:Float64})) AS timestamp", selector.Timestamp),
-        fmt.Sprintf("'%s:%s:%s' AS __name__", selector.Params["dbase"], selector.Params["table"], selector.Params["value"]),
-    }
-    fields = append(fields, selector.Labels...)
-
-    limit := ""
-    if lmt > 0 { limit = fmt.Sprintf("LIMIT %d", lmt) }
-
-    interpolate := append(selector.Labels, "value")
-
-    query := fmt.Sprintf(
-        "SELECT %s FROM `%s`.`%s` WHERE %s GROUP BY ALL ORDER BY timestamp ASC WITH FILL STEP toIntervalSecond({step:Float64}) INTERPOLATE (%s) %s",
-        strings.Join(fields, ", "),
-        selector.Params["dbase"],
-        selector.Params["table"],
-        strings.Join(selector.Conditions, " AND "),
-        strings.Join(interpolate, ", "),
-        limit,
+    selector.Conditions = append(
+        selector.Conditions, 
+        fmt.Sprintf("`%s` BETWEEN toDateTime(@start,'UTC') AND toDateTime(@end,'UTC')", mapKeys(selector.Times)[0]),
     )
 
-    return query, nil
+    if db.debug {
+        log.Printf("[selector] %s", selector)
+    }
+
+    fields := []string{
+        //fmt.Sprintf("any(`%s`) AS value", selector.Value),
+        fmt.Sprintf("`%s` AS value", selector.Value),
+        fmt.Sprintf("`%s` AS timestamp", mapKeys(selector.Times)[0]),
+        fmt.Sprintf("'%s:%s:%s' AS __name__", selector.DBase, selector.Table, selector.Value),
+        //fmt.Sprintf("toStartOfInterval(`%s`, toIntervalSecond(@step)) AS timestamp", mapKeys(selector.Times)[0]),
+    }
+
+    if len(grouping) == 0 {
+        for k, _ := range selector.Labels {
+            fields = append(fields, k)
+            grouping = append(grouping, k)
+        }
+    } else {
+        for _, v := range grouping {
+            if _, ok := selector.Labels[v]; !ok {
+                return "", grouping, fmt.Errorf("unable to find `%s` field in table: %s.%s", v, selector.DBase, selector.Table)
+            }
+        }
+    }
+
+    query := fmt.Sprintf(
+        //"SELECT %s FROM `%s`.`%s` WHERE %s GROUP BY %s ORDER BY timestamp ASC WITH FILL STEP toIntervalSecond(@step) INTERPOLATE (%s) %s",
+        "SELECT %s FROM `%s`.`%s` WHERE %s GROUP BY %s ORDER BY timestamp",
+        strings.Join(fields, ", "),
+        selector.DBase,
+        selector.Table,
+        strings.Join(selector.Conditions, " AND "),
+        strings.Join(append([]string{"value","timestamp","__name__"}, grouping...), ", "),
+        //strings.Join(append([]string{"__name__","value"}, grouping...), ", "),
+        //limit,
+    )
+
+    return query, grouping, nil
 }
 
-func (db *Client) QueryWalk(node parser.Node, limit int) (string, error) {
-    //fmt.Printf("Walk: %s\n", "-------------------------------")
+func (db *Client) QueryWalk(node parser.Node, grouping []string) (string, []string, error) {
     switch n := node.(type) {
         case *parser.BinaryExpr:
-            //fmt.Printf("Binary Expression: %s\n", n.Op)
-            return db.BinaryExpr(n.Op.String(), n.LHS, n.RHS)
+            return db.BinaryExpr(n.Op.String(), grouping, n.LHS, n.RHS)
         case *parser.AggregateExpr:
-            //fmt.Printf("Aggregate Expression: %s\n", n.Op)
-            //fmt.Printf("Grouping - %v\n", n.Grouping)
-            //Walk(query, n.Expr)
             return db.AggregateExpr(n.Op.String(), n.Grouping, n.Expr)
+        case *parser.VectorSelector:
+            return db.VectorSelector(n.LabelMatchers, grouping)
         case *parser.Call:
-            return "", fmt.Errorf("unsupported function: %v", n.Func.Name)
+            return "", grouping, fmt.Errorf("unsupported function: %v", n.Func.Name)
             //fmt.Printf("Function: %s\n", n.Func.Name)
             //for _, arg := range n.Args {
             //    Walk(query, arg)
             //}
-        case *parser.MatrixSelector:
-            fmt.Printf("Matrix: %s\n", n.String())
-            //Walk(query, n.VectorSelector)
-        case *parser.VectorSelector:
-            //fmt.Printf("Vector: %s\n", n.String())
-            //fmt.Printf("label - %v\n", n.LabelMatchers)
-            return db.VectorSelector(n.LabelMatchers, limit)
         //case *parser.NumberLiteral:
         //    fmt.Printf("Literal: %v\n", n)
         //    fmt.Printf("Pos: %v\n", n.PosRange)
+        //case *parser.MatrixSelector:
+        //    fmt.Printf("Matrix: %s\n", n.String())
+        //    //Walk(query, n.VectorSelector)
         default:
-            return "", fmt.Errorf("unknown node type: %T\n", n)
+            return "", grouping, fmt.Errorf("unknown node type: %T\n", n)
     }
 
-    return "", nil
+    return "", grouping, nil
 }
 
 func (db *Client) Query(query string, limit int, start time.Time, timeout time.Duration) ([]config.Result, error) {
     if db.debug {
-        log.Printf("[query] %v", query)
+        log.Printf("[query] %s", query)
     }
 
     results, err := db.QueryRange(query, 1, start, time.Now(), 1 * time.Minute)
@@ -511,31 +688,44 @@ func (db *Client) QueryRange(query string, limit int, start, end time.Time, step
         return results, err
     }
 
-    sel, err := db.QueryWalk(expr, limit)
+    sel, _, err := db.QueryWalk(expr, []string{})
     if err != nil {
         return results, err
     }
 
+    sel = fmt.Sprintf(
+        "SELECT %s FROM (%s) GROUP BY %s ORDER BY timestamp %s", 
+        "__name__, any(`value`) AS value, toStartOfInterval(`timestamp`, toIntervalSecond(@step)) AS timestamp, label",
+        sel,
+        "timestamp, __name__, label",
+        "WITH FILL STEP toIntervalSecond(@step) INTERPOLATE (__name__, value)",
+    )
+
     if db.debug {
-        log.Printf("[range] %v", query)
-        log.Printf("[range] %v", sel)
+        log.Printf("[range] %s", query)
+        log.Printf("[range] %s", sel)
     }
 
-    clientParams := client.Parameters{}
-    clientParams["start"] = start.Format("2006-01-02 15:04:05")
-    clientParams["end"] = end.Format("2006-01-02 15:04:05")
-    clientParams["step"] = fmt.Sprintf("%.3f", step.Seconds())
+    chCtx := ch.Context(context.Background(), ch.WithParameters(ch.Parameters{}))
 
-    chCtx := client.Context(context.Background(), client.WithParameters(clientParams))
-
-    rows, err := db.client.Query(chCtx, sel)
+    rows, err := db.client.QueryContext(
+        chCtx, 
+        sel,
+        sql.Named("start", start.Format("2006-01-02 15:04:05")),
+        sql.Named("end", end.Format("2006-01-02 15:04:05")),
+        sql.Named("step", step.Seconds()),
+    )
     if err != nil {
         log.Printf("[error] %v", err)
         return results, err
     }
     defer rows.Close()
 
-    columnTypes := rows.ColumnTypes()
+    columnTypes, err := rows.ColumnTypes()
+    if err != nil {
+        return results, err
+    }
+
     vars := make([]interface{}, len(columnTypes))
     for i := range columnTypes {
         vars[i] = reflect.New(columnTypes[i].ScanType()).Interface()
@@ -551,7 +741,8 @@ func (db *Client) QueryRange(query string, limit int, start, end time.Time, step
 
         for i, val := range vars {
             ctype := columnTypes[i]
-            if ctype.DatabaseTypeName() == "String" {
+
+            if ctype.Name() != "value" && ctype.Name() != "timestamp" {
                 metric[ctype.Name()] = reflect.ValueOf(val).Elem().String()
             }
             if ctype.Name() == "value" {

@@ -36,15 +36,19 @@ type Source struct {
     Password               string                  `yaml:"password"`
     DialTimeout            time.Duration           `yaml:"dial_timeout"`
     MaxExecutionTime       int                     `yaml:"max_execution_time"`
+    DBaseNames             []string                `yaml:"dbase_names"`
     TableNames             []string                `yaml:"table_names"`
     Tables                 []*Table                `yaml:"tables"`
 }
 
 type Table struct {
     Name                   string                  `yaml:"name"`
+    LabelTypes             []string                `yaml:"label_types"`
     LabelNames             []string                `yaml:"label_names"`
+    ValueTypes             []string                `yaml:"value_types"`
     ValueNames             []string                `yaml:"value_names"`
-    Timestamp              string                  `yaml:"timestamp"`
+    TimesTypes             []string                `yaml:"times_types"`
+    TimesNames             []string                `yaml:"times_names"`
 }
 
 type Result struct {
