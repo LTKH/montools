@@ -48,7 +48,7 @@ var (
     maxTimeFormatted = MaxTime.Format(time.RFC3339Nano)
 )
 
-type Prom struct {
+type PromQL struct {
     db           *db.Client
     debug        bool
 }
@@ -159,15 +159,15 @@ func parseDuration(s string) (time.Duration, error) {
     return 0, fmt.Errorf("cannot parse %q to a valid duration", s)
 }
 
-func New(conf *config.Upstream) (*Prom, error) {
+func New(conf *config.Upstream) (*PromQL, error) {
     conn, err := db.NewClient(conf.Source, conf.Debug)
     if err != nil {
-        return &Prom{}, err
+        return &PromQL{}, err
     }
-    return &Prom{ db: &conn, debug: conf.Debug }, nil
+    return &PromQL{ db: &conn, debug: conf.Debug }, nil
 }
 
-func (api *Prom) ApiLabels(w http.ResponseWriter, r *http.Request) {
+func (api *PromQL) ApiLabels(w http.ResponseWriter, r *http.Request) {
     if api.debug { log.Printf(r.URL.Path) }
     w.Header().Set("Content-Type", "application/json")
 
@@ -198,7 +198,7 @@ func (api *Prom) ApiLabels(w http.ResponseWriter, r *http.Request) {
     w.Write(encodeResp(&Resp{Status:"success", Data:labels}))
 }
 
-func (api *Prom) ApiLabelValues(w http.ResponseWriter, r *http.Request) {
+func (api *PromQL) ApiLabelValues(w http.ResponseWriter, r *http.Request) {
     if api.debug { log.Printf(r.URL.Path) }
     w.Header().Set("Content-Type", "application/json")
 
@@ -233,7 +233,7 @@ func (api *Prom) ApiLabelValues(w http.ResponseWriter, r *http.Request) {
     w.Write(encodeResp(&Resp{Status:"success", Data:labels}))
 }
 
-func (api *Prom) ApiQuery(w http.ResponseWriter, r *http.Request) {
+func (api *PromQL) ApiQuery(w http.ResponseWriter, r *http.Request) {
     if api.debug { log.Printf(r.URL.Path) }
     w.Header().Set("Content-Type", "application/json")
 
@@ -264,7 +264,7 @@ func (api *Prom) ApiQuery(w http.ResponseWriter, r *http.Request) {
     w.Write(encodeResp(&Resp{Status:"success", Data:result}))
 }
 
-func (api *Prom) ApiQueryRange(w http.ResponseWriter, r *http.Request) {
+func (api *PromQL) ApiQueryRange(w http.ResponseWriter, r *http.Request) {
     if api.debug { log.Printf(r.URL.Path) }
     w.Header().Set("Content-Type", "application/json")
 
@@ -319,7 +319,7 @@ func (api *Prom) ApiQueryRange(w http.ResponseWriter, r *http.Request) {
     w.Write(encodeResp(&Resp{Status:"success", Data:result}))
 }
 
-func (api *Prom) ApiQueryExemplars(w http.ResponseWriter, r *http.Request) {
+func (api *PromQL) ApiQueryExemplars(w http.ResponseWriter, r *http.Request) {
     if api.debug { log.Printf(r.URL.Path) }
     w.Header().Set("Content-Type", "application/json")
 
@@ -347,7 +347,7 @@ func (api *Prom) ApiQueryExemplars(w http.ResponseWriter, r *http.Request) {
     w.Write(encodeResp(&Resp{Status:"success", Data:labels}))
 }
 
-func (api *Prom) ApiSeries(w http.ResponseWriter, r *http.Request) {
+func (api *PromQL) ApiSeries(w http.ResponseWriter, r *http.Request) {
     if api.debug { log.Printf(r.URL.Path) }
     w.Header().Set("Content-Type", "application/json")
 
@@ -383,14 +383,14 @@ func (api *Prom) ApiSeries(w http.ResponseWriter, r *http.Request) {
     w.Write(encodeResp(&Resp{Status:"success", Data:series}))
 }
 
-func (api *Prom) ApiMetadata(w http.ResponseWriter, r *http.Request) {
+func (api *PromQL) ApiMetadata(w http.ResponseWriter, r *http.Request) {
     if api.debug { log.Printf(r.URL.Path) }
     w.Header().Set("Content-Type", "application/json")
     w.WriteHeader(200)
     w.Write(encodeResp(&Resp{Status:"success", Data:make(map[string]interface{}, 0)}))
 }
 
-func (api *Prom) ApiRules(w http.ResponseWriter, r *http.Request) {
+func (api *PromQL) ApiRules(w http.ResponseWriter, r *http.Request) {
     if api.debug { log.Printf(r.URL.Path) }
     w.Header().Set("Content-Type", "application/json")
     w.WriteHeader(200)

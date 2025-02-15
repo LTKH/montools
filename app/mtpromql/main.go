@@ -26,10 +26,15 @@ func main() {
     }
 
     for _, upstream := range cfg.Upstreams {
+        if upstream.Type != "promql" {
+            continue
+        }
+
         api, err := promql.New(upstream)
         if err != nil {
             log.Fatalf("[error] %v", err)
         }
+
         rtr := mux.NewRouter()
         rtr.HandleFunc("/api/v1/labels", api.ApiLabels)
         rtr.HandleFunc("/api/v1/label/{name:[^/]+}/values", api.ApiLabelValues)
@@ -40,45 +45,24 @@ func main() {
         rtr.HandleFunc("/api/v1/metadata", api.ApiMetadata)
         rtr.HandleFunc("/api/v1/rules", api.ApiRules)
         http.Handle("/", rtr)
+
         go func(){
+            log.Printf("[info] upstream address: %v", upstream.ListenAddr)
             err = http.ListenAndServe(upstream.ListenAddr, nil)
             if err != nil {
                 log.Fatalf("[error] %v", err)
             }
         }()
-        //mux := http.NewServeMux()
-        //mux.HandleFunc("/loki/api/v1/labels", apiLoki.ApiLabels)
-        //mux.HandleFunc("/loki/api/v1/label/*/values", apiLoki.ApiLabelValues)
-        //mux.HandleFunc("/loki/api/v1/query_range", apiLoki.ApiQueryRange)
-        //mux.HandleFunc("/", apiLoki.ApiLoki)
-        
-        //go func(){
-        //    err = http.ListenAndServe("127.0.0.1:3100", mux)
-        //    if err != nil {
-        //        log.Fatalf("[error] %v", err)
-        //    }
-        //}()
     }
 
-    //rtr := mux.NewRouter()
-    //rtr.HandleFunc("/api/v1/labels", apiProm.ApiPromLabels)
-    //rtr.HandleFunc("/api/v1/label/{name:[^/]+}/values", apiProm.ApiPromLabelValues)
-    //rtr.HandleFunc("/api/v1/query", apiProm.ApiPromQuery)
-    //rtr.HandleFunc("/api/v1/query_range", apiProm.ApiPromQueryRange)
-    
-
-    // Now expr contains parsed MetricsQL as `*Expr` structs.
-    // See Parse examples for more details.
-    //log.Printf("%v", expr)
-
-    log.Print("[info] mtprod started")
+    log.Print("[info] mtpromql started")
 
     // Program signal processing
     c := make(chan os.Signal, 1)
     signal.Notify(c, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
     for {
         <-c
-        log.Print("[info] mtprod stopped")
+        log.Print("[info] mtpromql stopped")
         os.Exit(0)
     }
 

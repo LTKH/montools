@@ -4,6 +4,7 @@ import (
     "time"
     "errors"
     "github.com/ltkh/montools/internal/config/mtprom"
+    "github.com/ltkh/montools/internal/db/oracle"
     "github.com/ltkh/montools/internal/db/clickhouse"
     //"github.com/ltkh/montools/internal/db/sqlite3"
     //"github.com/ltkh/montools/internal/db/redis"
@@ -22,6 +23,8 @@ type Client interface {
 
 func NewClient(config *config.Source, debug bool) (Client, error) {
     switch config.Type {
+        case "oracle":
+            return oracle.NewClient(config, debug)
         case "clickhouse":
             return clickhouse.NewClient(config, debug)
     }

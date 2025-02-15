@@ -26,11 +26,11 @@ import (
 type Client struct {
     client *sql.DB
     config *config.Source
-    tables Tables
+    cache Cache
     debug bool
 }
 
-type Tables struct {
+type Cache struct {
     sync.RWMutex
     Items map[string]Item
 }
@@ -42,9 +42,15 @@ type Item struct {
 }
 
 type Selector struct {
+    //DBase  string
+    //Table  string
+    //Name   string
+    Tables map[string]Table
+}
+
+type Table struct {
     DBase  string
     Table  string
-    Name   string
     Value  string
     Fields []string
     Values map[string]string
@@ -71,11 +77,11 @@ func NewClient(conf *config.Source, debug bool) (*Client, error) {
         Protocol:  ch.HTTP,
     })
 
-    cache := Tables{
+    cache := Cache{
         Items: make(map[string]Item),
     }
 
-    db := &Client{ client: conn, config: conf, tables: cache, debug: debug }
+    db := &Client{ client: conn, config: conf, cache: cache, debug: debug }
 
     go func(){
         for {
@@ -92,15 +98,14 @@ func inArray(value string, array []string) bool {
         return true
     }
 
-    for _, val := range array {
-        matched, err := regexp.MatchString("^"+val+"$", value)
-        if err != nil {
-            log.Printf("[error] regexp match %v", err)
-            return false
-        }
-        if matched {
-            return true
-        }
+    values := fmt.Sprintf("^(%s)$", strings.Join(array, "|"))
+    matched, err := regexp.MatchString(values, value)
+    if err != nil {
+        log.Printf("[error] regexp match %v", err)
+        return false
+    }
+    if matched {
+        return true
     }
 
     return false
@@ -122,11 +127,11 @@ func getHash(text string) string {
     return hex.EncodeToString(h.Sum(nil))
 }
 
-func (tb *Tables) Set(key string, labels, values, times map[string]string) error {
-    tb.Lock()
-    defer tb.Unlock()
+func (c *Cache) Set(key string, labels, values, times map[string]string) error {
+    c.Lock()
+    defer c.Unlock()
 
-    val, found := tb.Items[key]
+    val, found := c.Items[key]
     if !found {
         val = Item{
             Labels: map[string]string{},
@@ -145,16 +150,16 @@ func (tb *Tables) Set(key string, labels, values, times map[string]string) error
         val.Times[k] = v
     }
     
-    tb.Items[key] = val
+    c.Items[key] = val
 
     return nil
 }
 
-func (tb *Tables) Get(key string) (Item, bool) {
-    tb.RLock()
-    defer tb.RUnlock()
+func (c *Cache) Get(key string) (Item, bool) {
+    c.RLock()
+    defer c.RUnlock()
 
-    val, found := tb.Items[key]
+    val, found := c.Items[key]
     if !found {
         return Item{}, false
     }
@@ -162,13 +167,26 @@ func (tb *Tables) Get(key string) (Item, bool) {
     return val, true
 }
 
-func (tb *Tables) Values(name string) []string {
-    tb.RLock()
-    defer tb.RUnlock()
+func (c *Cache) Keys() []string {
+    c.RLock()
+    defer c.RUnlock()
+
+    var keys []string
+
+    for key, _ := range c.Items {
+        keys = append(keys, key)
+    }
+
+    return keys
+}
+
+func (c *Cache) Values(name string) []string {
+    c.RLock()
+    defer c.RUnlock()
 
     var items []string
 
-    for key, val := range tb.Items {
+    for key, val := range c.Items {
         if len(val.Times) > 0 {
             for v, _ := range val.Values {
                 if name != "" && name != v { continue }
@@ -180,20 +198,19 @@ func (tb *Tables) Values(name string) []string {
     return items
 }
 
-func (tb *Tables) Labels() []string {
-    tb.RLock()
-    defer tb.RUnlock()
+func (c *Cache) Labels() []string {
+    c.RLock()
+    defer c.RUnlock()
 
     var items []string
 
-    for key, val := range tb.Items {
+    for key, val := range c.Items {
         if len(val.Times) == 0 {
             continue
         }
-        //if len(val.Values) == 0 {
-        //    continue
-        //    val.Values["count"] = "Custom"
-        //}
+        if len(val.Values) == 0 {
+            continue
+        }
         for v, _ := range val.Labels {
             items = append(items, fmt.Sprintf("%s:%s", key, v))
         }
@@ -208,7 +225,7 @@ func (db *Client) Close() error {
     return nil
 }
 
-func (db *Client) GetTable(name string) *config.Table {
+func (db *Client) GetConfTable(name string) *config.Table {
     for _, tab := range db.config.Tables {
         if m, _ := regexp.MatchString("^"+tab.Name+"$", name); m {
             return tab
@@ -252,7 +269,7 @@ func (db *Client) SetColumns(dbaseNames, tableNames []string) error {
         }
 
         id := fmt.Sprintf("%s:%s", dbase, table)
-        tb := db.GetTable(id)
+        tb := db.GetConfTable(id)
 
         if len(tb.LabelTypes) == 0 {
             tb.LabelTypes = []string{"String"}
@@ -280,32 +297,131 @@ func (db *Client) SetColumns(dbaseNames, tableNames []string) error {
             times[fname] = ftype
         }
 
-        db.tables.Set(id, labels, values, times)
+        db.cache.Set(id, labels, values, times)
     }
 
     return nil
 }
 
-func (db *Client) NewSelector(dbase, table string, labs []*labels.Matcher) (Selector, error) {
-    selector := Selector{
+func (db *Client) GetTable(dbase, table, value string, labs []*labels.Matcher) (Table, error) {
+    result := Table{
         DBase: dbase,
         Table: table,
-        Name:  "1",
+        Value: value,
         Fields: []string{},
         Values: map[string]string{},
         Labels: map[string]string{},
         Times:  map[string]string{},
         Conditions: []string{},
-        
+    }
+
+    item, ok := db.cache.Get(fmt.Sprintf("%s:%s", dbase, table))
+    if !ok {
+        return result, fmt.Errorf("unable to get table attributes: %s.%s", dbase, table)
+    }
+    for k, v := range item.Values {
+        result.Values[k] = v
+    }
+    for k, v := range item.Times {
+        result.Times[k] = v
+        break
     }
 
     for _, l := range labs {
-        if l.Name == "__name__" {
+        result.Labels[l.Name] = "String"
+
+        if l.Name == "__table__" || l.Name == "__name__" {
+            result.Fields = append(result.Fields, fmt.Sprintf("'%s' AS %s", l.Value, l.Name))
+            continue
+        }
+
+        switch l.Type {
+            case labels.MatchEqual:
+                result.Conditions = append(result.Conditions, fmt.Sprintf("equals(%s, '%s')", l.Name, l.Value))
+            case labels.MatchNotEqual:
+                result.Conditions = append(result.Conditions, fmt.Sprintf("notEquals(%s, '%s')", l.Name, l.Value))
+            case labels.MatchRegexp:
+                result.Conditions = append(result.Conditions, fmt.Sprintf("match(%s, '%s')", l.Name, l.Value))
+            case labels.MatchNotRegexp:
+                result.Conditions = append(result.Conditions, fmt.Sprintf("NOT match(%s, '%s')", l.Name, l.Value))
+        }
+
+        if _, ok := item.Labels[l.Name]; !ok {
+            result.Fields = append(result.Fields, fmt.Sprintf("'' AS %s", l.Name))
+        } else {
+            result.Fields = append(result.Fields, l.Name)
+        }
+    }
+
+    return result, nil
+}
+
+func (db *Client) NewSelector(dbase, table string, labs []*labels.Matcher) (Selector, error) {
+    selector := Selector{
+        Tables: map[string]Table{},
+    }
+
+    for _, l := range labs {
+        if l.Name == "__table__" || l.Name == "__name__" {
+
+            vals := strings.Split(l.Value, ":")
+            value := ""
+
+            if len(vals) < 2 { continue }
+            if len(vals) == 3 { value = vals[2] }
+            id := fmt.Sprintf("%s:%s", vals[0], vals[1])
+
+            switch l.Type {
+                case labels.MatchEqual:
+                    table, err := db.GetTable(vals[0], vals[1], value, labs)
+                    if err != nil { return selector, err }
+                    selector.Tables[id] = table
+                case labels.MatchNotEqual:
+                    for _, key := range db.cache.Keys() {
+                        if key != id {
+                            table, err := db.GetTable(vals[0], vals[1], value, labs)
+                            if err != nil { return selector, err }
+                            selector.Tables[id] = table
+                        }
+                    }
+                case labels.MatchRegexp:
+                    for _, key := range db.cache.Keys() {
+                        matched, err := regexp.MatchString(l.Value, key)
+                        if err != nil {
+                            return selector, err
+                        }
+                        if matched {
+                            table, err := db.GetTable(vals[0], vals[1], value, labs)
+                            if err != nil { return selector, err }
+                            selector.Tables[id] = table
+                        }
+                    }
+                case labels.MatchNotRegexp:
+                    for _, key := range db.cache.Keys() {
+                        matched, err := regexp.MatchString(l.Value, key)
+                        if err != nil {
+                            return selector, err
+                        }
+                        if !matched {
+                            table, err := db.GetTable(vals[0], vals[1], value, labs)
+                            if err != nil { return selector, err }
+                            selector.Tables[id] = table
+                        }
+                    }
+            }
+        }
+    }
+
+    /*
+    for _, l := range labs {
+        if l.Name == "__table__" || l.Name == "__name__" {
             selector.Name = l.Value
             vals := strings.Split(l.Value, ":")
             if len(vals) > 0 { selector.DBase = vals[0] }
             if len(vals) > 1 { selector.Table = vals[1] }
             if len(vals) > 2 { selector.Value = vals[2] }
+            selector.Fields = append(selector.Fields, fmt.Sprintf("'%s' AS %s", l.Value, l.Name))
+            selector.Labels[l.Name] = "String"
         } else {
             switch l.Type {
                 case labels.MatchEqual:
@@ -318,6 +434,7 @@ func (db *Client) NewSelector(dbase, table string, labs []*labels.Matcher) (Sele
                     selector.Conditions = append(selector.Conditions, fmt.Sprintf("NOT match(%s, '%s')", l.Name, l.Value))
             }
             selector.Fields = append(selector.Fields, l.Name)
+            selector.Labels[l.Name] = "String"
         }
     }
 
@@ -329,7 +446,7 @@ func (db *Client) NewSelector(dbase, table string, labs []*labels.Matcher) (Sele
     }
 
     id := fmt.Sprintf("%s:%s", selector.DBase, selector.Table)
-    item, ok := db.tables.Get(id)
+    item, ok := db.cache.Get(id)
 
     if !ok {
         return selector, fmt.Errorf("unable to get table attributes: %s.%s", selector.DBase, selector.Table)
@@ -352,6 +469,7 @@ func (db *Client) NewSelector(dbase, table string, labs []*labels.Matcher) (Sele
     if len(selector.Times) == 0 {
         return selector, fmt.Errorf("unable to find date field in table: %s.%s", selector.DBase, selector.Table)
     }
+    */
 
     return selector, nil
 }
@@ -360,10 +478,10 @@ func (db *Client) LabelValues(name string, start, end time.Time) ([]string, erro
     var results []string
 
     labs := make(map[string]bool)
-
+ 
     if name == "" {
 
-        for _, val := range db.tables.Labels() {
+        for _, val := range db.cache.Labels() {
             v := strings.Split(val, ":")
             if len(v) != 3 { continue }
             labs[v[2]] = true
@@ -372,7 +490,12 @@ func (db *Client) LabelValues(name string, start, end time.Time) ([]string, erro
             results = append(results, key)
         }
 
+    } else if name == "__table__" {
+
+        results = db.cache.Keys()
+
     } else if name == "__name__" {
+        
     
         /*
         if err := db.SetColumns(db.config.DBaseNames, db.config.TableNames); err != nil {
@@ -380,15 +503,15 @@ func (db *Client) LabelValues(name string, start, end time.Time) ([]string, erro
         }
         */
 
-        results = db.tables.Values("")
+        results = db.cache.Values("")
 
     } else {
         
-        for _, val := range db.tables.Values(name) {
+        for _, val := range db.cache.Values(name) {
             v := strings.Split(val, ":")
             if len(v) != 3 { continue }
 
-            item, ok := db.tables.Get(fmt.Sprintf("%s:%s", v[0], v[1]))
+            item, ok := db.cache.Get(fmt.Sprintf("%s:%s", v[0], v[1]))
             if !ok { continue }
 
             chCtx := ch.Context(context.Background(), ch.WithParameters(ch.Parameters{}))
@@ -458,25 +581,32 @@ func (db *Client) Series(match string, start, end time.Time) ([]map[string]strin
         if err != nil {
             return series, err
         }
-        selector.Conditions = append(
-            selector.Conditions, 
-            fmt.Sprintf("`%s` BETWEEN toDateTime(@start,'UTC') AND toDateTime(@end,'UTC')", mapKeys(selector.Times)[0]),
-        )
 
-        if selector.Name == "" {
-            return series, nil
-        }
+        for _, table := range selector.Tables {
 
-        if len(selector.Labels) > 0 {
-
+            table.Conditions = append(
+                table.Conditions, 
+                "1 = 1",
+                //fmt.Sprintf("`%s` BETWEEN toDateTime(@start,'UTC') AND toDateTime(@end,'UTC')", mapKeys(table.Times)[0]),
+            )
+    
+            //if table.Name == "" {
+            //    return series, nil
+            //}
+    
+            //if len(table.Labels) > 0 {
+            //
+            //}
+    
             chCtx := ch.Context(context.Background(), ch.WithParameters(ch.Parameters{}))
 
             query := fmt.Sprintf(
-                "SELECT %s FROM `%s`.`%s` WHERE %s GROUP BY ALL LIMIT 100", 
-                strings.Join(mapKeys(selector.Labels), ", "), 
-                selector.DBase, 
-                selector.Table, 
-                strings.Join(selector.Conditions, " AND "),
+                "SELECT %s FROM `%s`.`%s` WHERE %s GROUP BY %s LIMIT 100", 
+                strings.Join(table.Fields, ", "),
+                table.DBase, 
+                table.Table, 
+                strings.Join(table.Conditions, " AND "),
+                strings.Join(mapKeys(table.Labels), ", "),
             )
             if db.debug {
                 log.Printf("[series] %s", query)
@@ -489,7 +619,7 @@ func (db *Client) Series(match string, start, end time.Time) ([]map[string]strin
                 sql.Named("end", end.Format("2006-01-02 15:04:05")),
             )
             if err != nil {
-                log.Printf("[error] read table %s: %v", selector.Table, err)
+                log.Printf("[error] read table %s: %v", table.Table, err)
                 return series, err
             }
             defer rows.Close()
@@ -504,11 +634,13 @@ func (db *Client) Series(match string, start, end time.Time) ([]map[string]strin
                 vars[i] = reflect.New(columnTypes[i].ScanType()).Interface()
             }
 
-            tb := db.GetTable(fmt.Sprintf("%s:%s", selector.DBase, selector.Table))
+            /*
+            tb := db.GetTable(fmt.Sprintf("%s:%s", table.DBase, table.Table))
 
             if len(tb.LabelTypes) == 0 {
                 tb.LabelTypes = []string{"String"}
             }
+            */
 
             for rows.Next() {
                 if err := rows.Scan(vars...); err != nil {
@@ -516,138 +648,147 @@ func (db *Client) Series(match string, start, end time.Time) ([]map[string]strin
                 }
 
                 labels := make(map[string]string)
-                labels["__name__"] = selector.Name
+                //labels["__name__"] = selector.Name
                 
                 for i, val := range vars {
                     ctype := columnTypes[i]
-                    if inArray(ctype.DatabaseTypeName(), tb.LabelTypes) && inArray(ctype.Name(), tb.LabelNames) {
-                        labels[ctype.Name()] = reflect.ValueOf(val).Elem().String()
-                    }
-                    
+                    //if inArray(ctype.DatabaseTypeName(), tb.LabelTypes) && inArray(ctype.Name(), tb.LabelNames) {
+                    //    labels[ctype.Name()] = reflect.ValueOf(val).Elem().String()
+                    //}
+                    labels[ctype.Name()] = reflect.ValueOf(val).Elem().String()
                 }
 
                 series = append(series, labels)
             }
         }
 
+        /*
         if len(series) == 0 {
             series = append(series, map[string]string{"__name__": selector.Name})
         }
+        */
     }
 
     return series, nil
 }
 
-func (db *Client) AggregateExpr(name string, grouping []string, expr parser.Node) (string, []string, error) {
-    grouping = append(grouping, "timestamp")
+func (db *Client) AggregateExpr(name string, grps []string, gr bool, expr parser.Node) (string, []string, error) {
+    //grouping = append(grouping, "timestamp")
 
-    sel, grouping, err := db.QueryWalk(expr, grouping)
+    sel, grps, err := db.QueryWalk(expr, grps, gr)
     if err != nil {
-        return "", grouping, err
+        return "", grps, err
     }
+
+    groupBy := strings.Join(append(grps, "timestamp", "__name__"), ", ")
 
     switch name {
         case "sum":
-            return fmt.Sprintf("SELECT sum(value) AS value, %[2]s FROM (%[1]s) GROUP BY %[2]s ORDER BY timestamp ASC", sel, strings.Join(grouping, ", ")), grouping, nil
+            return fmt.Sprintf("SELECT sum(value) AS value, %[2]s FROM (%[1]s) GROUP BY %[2]s ORDER BY timestamp ASC", sel, groupBy), grps, nil
         case "count":
-            return fmt.Sprintf("SELECT count(value) AS value, %[2]s FROM (%[1]s) GROUP BY %[2]s ORDER BY timestamp ASC", sel, strings.Join(grouping, ", ")), grouping, nil
+            return fmt.Sprintf("SELECT count(value) AS value, %[2]s FROM (%[1]s) GROUP BY %[2]s ORDER BY timestamp ASC", sel, groupBy), grps, nil
         case "min":
-            return fmt.Sprintf("SELECT min(value) AS value, %[2]s FROM (%[1]s) GROUP BY %[2]s ORDER BY timestamp ASC", sel, strings.Join(grouping, ", ")), grouping, nil
+            return fmt.Sprintf("SELECT min(value) AS value, %[2]s FROM (%[1]s) GROUP BY %[2]s ORDER BY timestamp ASC", sel, groupBy), grps, nil
         case "max":
-            return fmt.Sprintf("SELECT max(value) AS value, %[2]s FROM (%[1]s) GROUP BY %[2]s ORDER BY timestamp ASC", sel, strings.Join(grouping, ", ")), grouping, nil
+            return fmt.Sprintf("SELECT max(value) AS value, %[2]s FROM (%[1]s) GROUP BY %[2]s ORDER BY timestamp ASC", sel, groupBy), grps, nil
         case "avg":
-            return fmt.Sprintf("SELECT avg(value) AS value, %[2]s FROM (%[1]s) GROUP BY %[2]s ORDER BY timestamp ASC", sel, strings.Join(grouping, ", ")), grouping, nil
+            return fmt.Sprintf("SELECT avg(value) AS value, %[2]s FROM (%[1]s) GROUP BY %[2]s ORDER BY timestamp ASC", sel, groupBy), grps, nil
     }
 
-    return "", grouping, fmt.Errorf("operator not supported by driver: ", name)
+    return "", grps, fmt.Errorf("operator not supported by driver: ", name)
 }
 
-func (db *Client) BinaryExpr(name string, grouping []string, LHS, RHS parser.Node) (string, []string, error) {
-    selL, _, err := db.QueryWalk(LHS, grouping)
+func (db *Client) BinaryExpr(name string, grps []string, gr bool, LHS, RHS parser.Node) (string, []string, error) {
+    selL, _, err := db.QueryWalk(LHS, grps, gr)
     if err != nil {
-        return "", []string{}, err
+        return "", grps, err
     }
 
-    selR, _, err := db.QueryWalk(RHS, grouping)
+    selR, _, err := db.QueryWalk(RHS, grps, gr)
     if err != nil {
-        return "", []string{}, err
+        return "", grps, err
     }
 
     switch name {
         case "+":
-            return fmt.Sprintf("SELECT (s1.value + s2.value) AS value, timestamp FROM (%s) AS s1, (%s) AS s2 ORDER BY timestamp ASC", selL, selR), []string{}, nil
+            return fmt.Sprintf("SELECT (s1.value + s2.value) AS value, timestamp, __name__ FROM (%s) AS s1, (%s) AS s2 ORDER BY timestamp ASC", selL, selR), []string{}, nil
         case "-":
-            return fmt.Sprintf("SELECT (s1.value - s2.value) AS value, timestamp FROM (%s) AS s1, (%s) AS s2 ORDER BY timestamp ASC", selL, selR), []string{}, nil
+            return fmt.Sprintf("SELECT (s1.value - s2.value) AS value, timestamp, __name__ FROM (%s) AS s1, (%s) AS s2 ORDER BY timestamp ASC", selL, selR), []string{}, nil
         case "/":
-            return fmt.Sprintf("SELECT (s1.value / s2.value) AS value, timestamp FROM (%s) AS s1, (%s) AS s2 ORDER BY timestamp ASC", selL, selR), []string{}, nil
+            return fmt.Sprintf("SELECT (s1.value / s2.value) AS value, timestamp, __name__ FROM (%s) AS s1, (%s) AS s2 ORDER BY timestamp ASC", selL, selR), []string{}, nil
         case "*":
-            return fmt.Sprintf("SELECT (s1.value * s2.value) AS value, timestamp FROM (%s) AS s1, (%s) AS s2 ORDER BY timestamp ASC", selL, selR), []string{}, nil
+            return fmt.Sprintf("SELECT (s1.value * s2.value) AS value, timestamp, __name__ FROM (%s) AS s1, (%s) AS s2 ORDER BY timestamp ASC", selL, selR), []string{}, nil
     }
 
     return "", []string{}, nil
 }
 
-func (db *Client) VectorSelector(labs []*labels.Matcher, grouping []string) (string, []string, error) {
+func (db *Client) VectorSelector(labs []*labels.Matcher, grps []string, gr bool) (string, []string, error) {
 
     selector, err := db.NewSelector("", "", labs)
     if err != nil {
-        return "", grouping, err
-    }
-    selector.Conditions = append(
-        selector.Conditions, 
-        fmt.Sprintf("`%s` BETWEEN toDateTime(@start,'UTC') AND toDateTime(@end,'UTC')", mapKeys(selector.Times)[0]),
-    )
-
-    if db.debug {
-        log.Printf("[selector] %s", selector)
+        return "", grps, err
     }
 
-    fields := []string{
-        //fmt.Sprintf("any(`%s`) AS value", selector.Value),
-        fmt.Sprintf("`%s` AS value", selector.Value),
-        fmt.Sprintf("`%s` AS timestamp", mapKeys(selector.Times)[0]),
-        fmt.Sprintf("'%s:%s:%s' AS __name__", selector.DBase, selector.Table, selector.Value),
-        //fmt.Sprintf("toStartOfInterval(`%s`, toIntervalSecond(@step)) AS timestamp", mapKeys(selector.Times)[0]),
-    }
+    for _, table := range selector.Tables {
 
-    if len(grouping) == 0 {
-        for k, _ := range selector.Labels {
-            fields = append(fields, k)
-            grouping = append(grouping, k)
+        table.Conditions = append(
+            table.Conditions, 
+            fmt.Sprintf("`%s` BETWEEN toDateTime(@start,'UTC') AND toDateTime(@end,'UTC')", mapKeys(table.Times)[0]),
+        )
+
+        if db.debug {
+            log.Printf("[selector] %s", table)
         }
-    } else {
-        for _, v := range grouping {
-            if _, ok := selector.Labels[v]; !ok {
-                return "", grouping, fmt.Errorf("unable to find `%s` field in table: %s.%s", v, selector.DBase, selector.Table)
+
+        fields := []string{
+            fmt.Sprintf("`%s` AS value", table.Value),
+            fmt.Sprintf("'%s:%s:%s' AS __name__", table.DBase, table.Table, table.Value),
+            fmt.Sprintf("toStartOfInterval(`%s`, toIntervalSecond(@step)) AS timestamp", mapKeys(table.Times)[0]),
+        }
+
+        if _, ok := table.Values[table.Value]; !ok {
+            return "", grps, fmt.Errorf("unable to find `%s` field in table: %s.%s", table.Value, table.DBase, table.Table)
+        }
+
+        if gr {
+            for _, v := range grps {
+                if _, ok := table.Labels[v]; !ok {
+                    return "", grps, fmt.Errorf("unable to find `%s` field in table: %s.%s", v, table.DBase, table.Table)
+                }
+            }
+        } else {
+            grps = []string{}
+            for k, _ := range table.Labels {
+                grps = append(grps, k)
             }
         }
+
+        query := fmt.Sprintf(
+            "SELECT %s FROM `%s`.`%s` WHERE %s GROUP BY %s ORDER BY timestamp",
+            strings.Join(append(fields, grps...), ", "),
+            table.DBase,
+            table.Table,
+            strings.Join(table.Conditions, " AND "),
+            strings.Join(append(grps, "value", "timestamp", "__name__"), ", "),
+        )
+
+        return query, grps, nil
     }
 
-    query := fmt.Sprintf(
-        //"SELECT %s FROM `%s`.`%s` WHERE %s GROUP BY %s ORDER BY timestamp ASC WITH FILL STEP toIntervalSecond(@step) INTERPOLATE (%s) %s",
-        "SELECT %s FROM `%s`.`%s` WHERE %s GROUP BY %s ORDER BY timestamp",
-        strings.Join(fields, ", "),
-        selector.DBase,
-        selector.Table,
-        strings.Join(selector.Conditions, " AND "),
-        strings.Join(append([]string{"value","timestamp","__name__"}, grouping...), ", "),
-        //strings.Join(append([]string{"__name__","value"}, grouping...), ", "),
-        //limit,
-    )
-
-    return query, grouping, nil
+    return "", []string{}, nil
 }
 
-func (db *Client) QueryWalk(node parser.Node, grouping []string) (string, []string, error) {
+func (db *Client) QueryWalk(node parser.Node, grps []string, gr bool) (string, []string, error) {
     switch n := node.(type) {
         case *parser.BinaryExpr:
-            return db.BinaryExpr(n.Op.String(), grouping, n.LHS, n.RHS)
+            return db.BinaryExpr(n.Op.String(), grps, gr, n.LHS, n.RHS)
         case *parser.AggregateExpr:
-            return db.AggregateExpr(n.Op.String(), n.Grouping, n.Expr)
+            return db.AggregateExpr(n.Op.String(), n.Grouping, true, n.Expr)
         case *parser.VectorSelector:
-            return db.VectorSelector(n.LabelMatchers, grouping)
+            return db.VectorSelector(n.LabelMatchers, grps, gr)
         case *parser.Call:
-            return "", grouping, fmt.Errorf("unsupported function: %v", n.Func.Name)
+            return "", grps, fmt.Errorf("unsupported function: %v", n.Func.Name)
             //fmt.Printf("Function: %s\n", n.Func.Name)
             //for _, arg := range n.Args {
             //    Walk(query, arg)
@@ -659,10 +800,10 @@ func (db *Client) QueryWalk(node parser.Node, grouping []string) (string, []stri
         //    fmt.Printf("Matrix: %s\n", n.String())
         //    //Walk(query, n.VectorSelector)
         default:
-            return "", grouping, fmt.Errorf("unknown node type: %T\n", n)
+            return "", grps, fmt.Errorf("unknown node type: %T\n", n)
     }
 
-    return "", grouping, nil
+    return "", grps, nil
 }
 
 func (db *Client) Query(query string, limit int, start time.Time, timeout time.Duration) ([]config.Result, error) {
@@ -688,18 +829,12 @@ func (db *Client) QueryRange(query string, limit int, start, end time.Time, step
         return results, err
     }
 
-    sel, _, err := db.QueryWalk(expr, []string{})
+    sel, grps, err := db.QueryWalk(expr, []string{}, false)
     if err != nil {
         return results, err
     }
 
-    sel = fmt.Sprintf(
-        "SELECT %s FROM (%s) GROUP BY %s ORDER BY timestamp %s", 
-        "__name__, any(`value`) AS value, toStartOfInterval(`timestamp`, toIntervalSecond(@step)) AS timestamp, label",
-        sel,
-        "timestamp, __name__, label",
-        "WITH FILL STEP toIntervalSecond(@step) INTERPOLATE (__name__, value)",
-    )
+    sel = fmt.Sprintf("%s WITH FILL STEP toIntervalSecond(@step) INTERPOLATE (%s)", sel, strings.Join(append(grps, "value"), ", "))
 
     if db.debug {
         log.Printf("[range] %s", query)
@@ -707,6 +842,10 @@ func (db *Client) QueryRange(query string, limit int, start, end time.Time, step
     }
 
     chCtx := ch.Context(context.Background(), ch.WithParameters(ch.Parameters{}))
+
+    if step.Seconds() < 10 {
+        step = time.Duration(10) * time.Second
+    }
 
     rows, err := db.client.QueryContext(
         chCtx, 
