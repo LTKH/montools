@@ -41,6 +41,7 @@ func main() {
         rtr.HandleFunc("/loki/api/v1/query", api.ApiQuery)
         rtr.HandleFunc("/loki/api/v1/query_range", api.ApiQueryRange)
         rtr.HandleFunc("/loki/api/v1/series", api.ApiSeries)
+        rtr.HandleFunc("/loki/api/v1/metadata", api.ApiMetadata)
         rtr.HandleFunc("/loki/api/v1/index/stats", api.ApiIndexStats)
         http.Handle("/", rtr)
 

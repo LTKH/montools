@@ -7,7 +7,7 @@ import (
     "fmt"
     "math"
     //"strconv"
-    "strings"
+    //"strings"
     "net/http"
     "time"
     "errors"
@@ -58,12 +58,6 @@ type Resp struct {
     Error        string                    `json:"error,omitempty"`
     Warnings     []string                  `json:"warnings,omitempty"`
     Data         interface{}               `json:"data"`
-}
-
-type ResultType struct {
-    ResultType   string                    `json:"resultType,omitempty"`
-    IsPartial    bool                      `json:"isPartial,omitempty"`
-    Result       []config.Result           `json:"result"`
 }
 
 type PromQuery struct {
@@ -234,10 +228,13 @@ func (api *PromQL) ApiLabelValues(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *PromQL) ApiQuery(w http.ResponseWriter, r *http.Request) {
-    if api.debug { log.Printf(r.URL.Path) }
+	log.Printf("%v", r.URL.Path)
     w.Header().Set("Content-Type", "application/json")
 
-    time, err := parseTimeParam(r, "time", MinTime)
+    query := r.FormValue("query")
+    limit := 0
+
+    start, err := parseTimeParam(r, "start", MinTime)
     if err != nil {
         log.Printf("[error] %v", err)
         w.Write(encodeResp(&Resp{Status:"error", Error:err.Error(), Data:make([]int, 0)}))
@@ -245,19 +242,20 @@ func (api *PromQL) ApiQuery(w http.ResponseWriter, r *http.Request) {
         return
     }
 
-    query := strings.Replace(r.FormValue("query"), ".", ":", -1)
-    
-    results, err := db.Client.Query(*api.db, query, 1, time, 0)
+    timeout, err := parseDuration("60s")
+    if err != nil {
+        log.Printf("[error] %v", err)
+        w.Write(encodeResp(&Resp{Status:"error", Error:err.Error(), Data:make([]int, 0)}))
+        w.WriteHeader(400)
+        return
+    }
+
+	result, err := db.Client.Query(*api.db, query, start, timeout, limit)
     if err != nil {
         log.Printf("[error] %v", err)
         w.WriteHeader(500)
         w.Write(encodeResp(&Resp{Status:"error", Error:err.Error(), Data:make([]int, 0)}))
         return
-    }
-
-    result := ResultType{
-        ResultType: "vector",
-        Result: results,
     }
 
     w.WriteHeader(200)
@@ -300,19 +298,14 @@ func (api *PromQL) ApiQueryRange(w http.ResponseWriter, r *http.Request) {
     }
 
     limit := 0
-    query := strings.Replace(r.FormValue("query"), ".", ":", -1)
+    query := r.FormValue("query")
 
-    results, err := db.Client.QueryRange(*api.db, query, limit, start, end, step)
+    result, err := db.Client.QueryRange(*api.db, query, start, end, step, limit)
     if err != nil {
         log.Printf("[error] %v", err)
         w.WriteHeader(500)
         w.Write(encodeResp(&Resp{Status:"error", Error:err.Error(), Data:make([]int, 0)}))
         return
-    }
-
-    result := ResultType{
-        ResultType: "matrix",
-        Result: results,
     }
 
     w.WriteHeader(200)
@@ -366,7 +359,7 @@ func (api *PromQL) ApiSeries(w http.ResponseWriter, r *http.Request) {
         return
     }
 
-    query := strings.Replace(r.FormValue("match[]"), ".", ":", -1)
+    query := r.FormValue("match[]")
     
     series, err := db.Client.Series(*api.db, query, start, end)
     if err != nil {

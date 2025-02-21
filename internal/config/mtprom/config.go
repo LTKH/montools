@@ -44,18 +44,27 @@ type Source struct {
 
 type Table struct {
     Name                   string                  `yaml:"name"`
-    LabelTypes             []string                `yaml:"label_types"`
-    LabelNames             []string                `yaml:"label_names"`
-    ValueTypes             []string                `yaml:"value_types"`
-    ValueNames             []string                `yaml:"value_names"`
-    TimesTypes             []string                `yaml:"times_types"`
-    TimesNames             []string                `yaml:"times_names"`
+    FieldNames             []string                `yaml:"field_names"`
+    TimeNames              []string                `yaml:"time_names"`
+}
+
+type ResultType struct {
+    ResultType             string                  `json:"resultType,omitempty"`
+    IsPartial              bool                    `json:"isPartial,omitempty"`
+    Result                 []Result                `json:"result"`
+    //Stats                  Stats                   `json:"stats"`
 }
 
 type Result struct {
-    Metric                 map[string]string       `json:"metric"`
+    Metric                 map[string]string       `json:"metric,omitempty"`
+    Stream                 map[string]string       `json:"stream,omitempty"`
     Value                  []interface{}           `json:"value,omitempty"`
     Values                 []interface{}           `json:"values,omitempty"`
+}
+
+type Stats struct {
+    Summary                map[string]interface{}  `json:"metric,omitempty"`
+    Querier                map[string]interface{}  `json:"stream,omitempty"`
 }
 
 func New(filename string) (*Config, error) {

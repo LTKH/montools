@@ -11,18 +11,17 @@ upstreams:
       #dial_timeout: 10s
       max_execution_time: 60
       dbase_names:
-        - system
-        - metrics
+        #- system
+        #- metrics
       table_names:
         #- errors
         #- metrics.*
       tables:
         - name: .*
-          #label_names: ["name", "label"]
-          value_names: ["value"]
-          #timestamps: ["timestamp"]
+          #field_names: ["value"]
+          #time_names: ["timestamp"]
 
-  - listen_addr: "127.0.0.1:3100"
+  - listen_addr: "127.0.0.1:3200"
     debug: true
     type: logql
     source:
@@ -34,13 +33,12 @@ upstreams:
       #dial_timeout: 10s
       max_execution_time: 60
       dbase_names:
-        - system
+        #- system
         - metrics
       table_names:
         #- errors
         #- metrics.*
       tables:
         - name: .*
-          #label_names: ["name", "label"]
-          value_names: ["value"]
-          #timestamps: ["timestamp"]
+          #field_names: ["value"]
+          #time_names: ["timestamp"]

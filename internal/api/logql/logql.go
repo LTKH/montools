@@ -13,10 +13,11 @@ import (
     //"bytes"
     //"regexp"
     //"io/ioutil"
-    "strings"
+    //"strings"
     "encoding/json"
     "github.com/gorilla/mux"
 	//"github.com/grafana/loki/pkg/logql"
+    //"github.com/prometheus/common/model"
     "github.com/ltkh/montools/internal/db"
     "github.com/ltkh/montools/internal/config/mtprom"
 )
@@ -44,12 +45,6 @@ var (
     maxTimeFormatted = MaxTime.Format(time.RFC3339Nano)
 )
 
-/*
-/loki/api/v1/labels
-/loki/api/v1/query_range
-/loki/api/v1/index/stats
-*/
-
 type LogQL struct {
     db           *db.Client
     debug        bool
@@ -59,8 +54,26 @@ type Resp struct {
     Status       string                    `json:"status"`
     Error        string                    `json:"error,omitempty"`
     Warnings     []string                  `json:"warnings,omitempty"`
-    Data         interface{}               `json:"data"`
+    Data         interface{}               `json:"data,omitempty"`
 }
+
+type Stats struct {
+    Bytes        int                       `json:"bytes"`       
+    Chunks       int                       `json:"chunks"`  
+    Entries      int                       `json:"entries"`  
+    Streams      int                       `json:"streams"`  
+}
+
+type ResultType struct {
+    ResultType   string                    `json:"resultType,omitempty"`
+    IsPartial    bool                      `json:"isPartial,omitempty"`
+    Result       []config.Result           `json:"result"`
+}
+
+//start=1739613624388000000&end=1739617224388000000
+//start=1739613820&end=1739617420
+//prom - "matrix" | "vector" | "scalar" | "string"
+//loki - "matrix" | "vector" | "streams"
 
 func encodeResp(resp *Resp) []byte {
     jsn, err := json.Marshal(resp)
@@ -68,6 +81,25 @@ func encodeResp(resp *Resp) []byte {
         return encodeResp(&Resp{Status:"error", Error:err.Error(), Data:make([]int, 0)})
     }
     return jsn
+}
+
+func parseTime(s string) (time.Time, error) {
+    if t, err := strconv.ParseInt(s, 10, 0); err == nil {
+        return time.Unix(0, t).UTC(), nil
+    }
+
+    return time.Time{}, fmt.Errorf("cannot parse %q to a valid timestamp", s)
+}
+
+func parseDuration(s string) (time.Duration, error) {
+    if s == "" {
+        return 0, nil
+    } 
+    if d, err := time.ParseDuration(s); err == nil {
+        return d, nil
+    }
+
+    return 0, fmt.Errorf("cannot parse %q to a valid duration", s)
 }
 
 func parseTimeParam(r *http.Request, paramName string, defaultValue time.Time) (time.Time, error) {
@@ -80,29 +112,6 @@ func parseTimeParam(r *http.Request, paramName string, defaultValue time.Time) (
         return time.Time{}, fmt.Errorf("invalid time value for '%s': %w", paramName, err)
     }
     return result, nil
-}
-
-func parseTime(s string) (time.Time, error) {
-    if t, err := strconv.ParseFloat(s, 64); err == nil {
-        s, ns := math.Modf(t)
-        ns = math.Round(ns*1000) / 1000
-        return time.Unix(int64(s), int64(ns*float64(time.Second))).UTC(), nil
-    }
-    if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
-        return t, nil
-    }
-
-    // Stdlib's time parser can only handle 4 digit years. As a workaround until
-    // that is fixed we want to at least support our own boundary times.
-    // Context: https://github.com/prometheus/client_golang/issues/614
-    // Upstream issue: https://github.com/golang/go/issues/20555
-    switch s {
-        case minTimeFormatted:
-            return MinTime, nil
-        case maxTimeFormatted:
-            return MaxTime, nil
-    }
-    return time.Time{}, fmt.Errorf("cannot parse %q to a valid timestamp", s)
 }
 
 func New(conf *config.Upstream) (*LogQL, error) {
@@ -139,10 +148,6 @@ func (api *LogQL) ApiLabels(w http.ResponseWriter, r *http.Request) {
         return
     }
     labels = append(labels, "__table__")
-
-    for _, v := range labels {
-        log.Printf("%v", v)
-    }
 
     w.WriteHeader(200)
     w.Write(encodeResp(&Resp{Status:"success", Data:labels}))
@@ -187,37 +192,78 @@ func (api *LogQL) ApiQuery(w http.ResponseWriter, r *http.Request) {
 	log.Printf("%v", r.URL.Path)
     w.Header().Set("Content-Type", "application/json")
 
-	var labels []string
+    query := r.FormValue("query")
+    limit := 0
+
+    start, err := parseTimeParam(r, "start", MinTime)
+    if err != nil {
+        log.Printf("[error] %v", err)
+        w.Write(encodeResp(&Resp{Status:"error", Error:err.Error(), Data:make([]int, 0)}))
+        w.WriteHeader(400)
+        return
+    }
+
+    timeout, err := parseDuration("60s")
+    if err != nil {
+        log.Printf("[error] %v", err)
+        w.Write(encodeResp(&Resp{Status:"error", Error:err.Error(), Data:make([]int, 0)}))
+        w.WriteHeader(400)
+        return
+    }
+
+	result, err := db.Client.LokiQuery(*api.db, query, start, timeout, limit)
+    if err != nil {
+        log.Printf("[error] %v", err)
+        w.WriteHeader(500)
+        w.Write(encodeResp(&Resp{Status:"error", Error:err.Error(), Data:make([]int, 0)}))
+        return
+    }
 
     w.WriteHeader(200)
-    w.Write(encodeResp(&Resp{Status:"success", Data:labels}))
+    w.Write(encodeResp(&Resp{Status:"success", Data:result}))
 }
 
 func (api *LogQL) ApiQueryRange(w http.ResponseWriter, r *http.Request) {
-	log.Printf("%v", r.URL.Path)
+	if api.debug { log.Printf(r.URL.Path) }
     w.Header().Set("Content-Type", "application/json")
 
-	var labels []string
+    query := r.FormValue("query")
+    limit := 0
 
-	query := r.URL.Query().Get("query")
-	if query == "" {
-		w.WriteHeader(400)
-		w.Write(encodeResp(&Resp{Status:"error", Error:"query string is empty", Data:make([]int, 0)}))
-		return
-	}
-
-    /*
-	test, err := logql.ParseLogSelector(query)
+    start, err := parseTimeParam(r, "start", MinTime)
     if err != nil {
+        log.Printf("[error] %v", err)
+        w.Write(encodeResp(&Resp{Status:"error", Error:err.Error(), Data:make([]int, 0)}))
         w.WriteHeader(400)
-		w.Write(encodeResp(&Resp{Status:"error", Error:err.Error(), Data:make([]int, 0)}))
-		return
+        return
     }
-    log.Printf("%v", test)
-    */
+
+    end, err := parseTimeParam(r, "end", MaxTime)
+    if err != nil {
+        log.Printf("[error] %v", err)
+        w.Write(encodeResp(&Resp{Status:"error", Error:err.Error(), Data:make([]int, 0)}))
+        w.WriteHeader(400)
+        return
+    }
+
+    step, err := parseDuration(r.FormValue("step"))
+    if err != nil {
+        log.Printf("[error] %v", err)
+        w.Write(encodeResp(&Resp{Status:"error", Error:err.Error(), Data:make([]int, 0)}))
+        w.WriteHeader(400)
+        return
+    }  
+
+    result, err := db.Client.LokiQueryRange(*api.db, query, start, end, step, limit)
+    if err != nil {
+        log.Printf("[error] %v", err)
+        w.WriteHeader(500)
+        w.Write(encodeResp(&Resp{Status:"error", Error:err.Error(), Data:make([]int, 0)}))
+        return
+    }
 
     w.WriteHeader(200)
-    w.Write(encodeResp(&Resp{Status:"success", Data:labels}))
+    w.Write(encodeResp(&Resp{Status:"success", Data:result}))
 }
 
 func (api *LogQL) ApiSeries(w http.ResponseWriter, r *http.Request) {
@@ -239,7 +285,7 @@ func (api *LogQL) ApiSeries(w http.ResponseWriter, r *http.Request) {
         return
     }
 
-    query := strings.Replace(r.FormValue("match[]"), ".", ":", -1)
+    query := r.FormValue("match[]")
     
     series, err := db.Client.Series(*api.db, query, start, end)
     if err != nil {
@@ -248,15 +294,18 @@ func (api *LogQL) ApiSeries(w http.ResponseWriter, r *http.Request) {
         return
     }
 
-    if len(series) == 0 {
-        series = make([]map[string]string, 0)
-    }
-
     w.WriteHeader(200)
     w.Write(encodeResp(&Resp{Status:"success", Data:series}))
 }
 
+func (api *LogQL) ApiMetadata(w http.ResponseWriter, r *http.Request) {
+    if api.debug { log.Printf(r.URL.Path) }
+    w.Header().Set("Content-Type", "application/json")
+    w.WriteHeader(200)
+    w.Write(encodeResp(&Resp{Status:"success", Data:make(map[string]interface{}, 0)}))
+}
+
 func (api *LogQL) ApiIndexStats(w http.ResponseWriter, r *http.Request) {
     w.WriteHeader(200)
-    w.Write(encodeResp(&Resp{Status:"success", Data:[]string{"zero"}}))
+    w.Write(encodeResp(&Resp{Status:"success", Data:Stats{}}))
 }

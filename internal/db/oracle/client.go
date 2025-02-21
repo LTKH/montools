@@ -62,14 +62,26 @@ func (db *Client) Series(match string, start, end time.Time) ([]map[string]strin
     return series, nil
 }
 
-func (db *Client) Query(query string, limit int, start time.Time, timeout time.Duration) ([]config.Result, error) {
-    var results []config.Result
+func (db *Client) Query(query string, start time.Time, timeout time.Duration, limit int) (config.ResultType, error) {
+    var result config.ResultType
 
-    return results, nil
+    return result, nil
 }
 
-func (db *Client) QueryRange(query string, limit int, start, end time.Time, step time.Duration) ([]config.Result, error) {
-    var results []config.Result
+func (db *Client) QueryRange(query string, start, end time.Time, step time.Duration, limit int) (config.ResultType, error) {
+    var result config.ResultType
   
-    return results, nil
+    return result, nil
+}
+
+func (db *Client) LokiQuery(query string, start time.Time, timeout time.Duration, limit int) (config.ResultType, error) {
+    var result config.ResultType
+
+    return result, nil
+}
+
+func (db *Client) LokiQueryRange(query string, start, end time.Time, step time.Duration, limit int) (config.ResultType, error) {
+    var result config.ResultType
+  
+    return result, nil
 }

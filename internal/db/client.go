@@ -16,9 +16,10 @@ type Client interface {
     Labels(start, end time.Time) ([]string, error)
     LabelValues(name string, start, end time.Time) ([]string, error)
     Series(match string, start, end time.Time) ([]map[string]string, error)
-    Query(query string, limit int, time time.Time, timeout time.Duration) ([]config.Result, error)
-    QueryRange(query string, limit int, start, end time.Time, step time.Duration) ([]config.Result, error)
-
+    Query(query string, time time.Time, timeout time.Duration, limit int) (config.ResultType, error)
+    QueryRange(query string, start, end time.Time, step time.Duration, limit int) (config.ResultType, error)
+    LokiQuery(query string, time time.Time, timeout time.Duration, limit int) (config.ResultType, error)
+    LokiQueryRange(query string, start, end time.Time, step time.Duration, limit int) (config.ResultType, error)
 }
 
 func NewClient(config *config.Source, debug bool) (Client, error) {
