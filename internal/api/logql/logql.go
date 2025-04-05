@@ -40,9 +40,6 @@ var (
     // The value is still high enough for practical purposes, so we don't want
     // to change it now, avoiding confusion for importers of this variable.
     MaxTime = time.Unix(math.MaxInt64/1000-62135596801, 999999999).UTC()
-
-    minTimeFormatted = MinTime.Format(time.RFC3339Nano)
-    maxTimeFormatted = MaxTime.Format(time.RFC3339Nano)
 )
 
 type LogQL struct {
@@ -133,6 +130,7 @@ func (api *LogQL) ApiLabels(w http.ResponseWriter, r *http.Request) {
         w.WriteHeader(400)
         return
     }
+
     end, err := parseTimeParam(r, "end", MaxTime)
     if err != nil {
         log.Printf("[error] %v", err)
@@ -164,6 +162,7 @@ func (api *LogQL) ApiLabelValues(w http.ResponseWriter, r *http.Request) {
         w.WriteHeader(400)
         return
     }
+
     end, err := parseTimeParam(r, "end", MaxTime)
     if err != nil {
         log.Printf("[error] %v", err)

@@ -10,13 +10,15 @@ http_client:
 
 upstreams: 
   - listen_addr: "127.0.0.1:8888"
+    size_limit: 30000000
+    update_stat: "10s"
     url_map:
       - src_paths:
           - ".*"
         url_prefix:
           - "http://127.0.0.1:8428"
         #health_check: "/health"
-        error_code: 204
+        #error_code: 204
 
 
   #- listen_addr: "127.0.0.1:8888"

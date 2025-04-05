@@ -17,7 +17,7 @@ import (
     "flag"
     "sync"
     //"math"
-    //"strings"
+    "strings"
     "bytes"
     "crypto/sha1"
     "encoding/hex"
@@ -39,6 +39,13 @@ var (
     sizeBytesTotal = prometheus.NewCounterVec(
         prometheus.CounterOpts{
             Name: "mtproxy_http_size_bytes_total",
+            Help: "",
+        },
+        []string{"listen_addr","url_path","object"},
+    )
+    sizeBytesDropped = prometheus.NewCounterVec(
+        prometheus.CounterOpts{
+            Name: "mtproxy_http_size_bytes_dropped",
             Help: "",
         },
         []string{"listen_addr","url_path","object"},
@@ -78,48 +85,82 @@ type API struct {
 type Objects struct {
     sync.RWMutex
     items        map[string]*Object
+    limit        float64
 }
 
 type Object struct {
     Timestamp    int64
-    Size         float64
+    Arr          []float64
     Avg          float64
     UrlPath      string
 }
 
-func (o *Objects) Set(object, path string, size float64) *Object {
-    o.Lock()
-    defer o.Unlock()
-
-    item, ok := o.items[object]
-    if ok {
-        o.items[object] = &Object{Timestamp: item.Timestamp, Size: item.Size + size, Avg: item.Avg, UrlPath: path}
-    } else {
-        o.items[object] = &Object{Timestamp: time.Now().Unix(), Size: 0, Avg: float64(0), UrlPath: path}
+func sumArray(numbers []float64) float64 {
+    result := float64(0)
+    for i := 0; i < len(numbers); i++ {
+        result += numbers[i]
     }
-
-    return o.items[object]
+    return result
 }
 
-func (o *Objects) Update(object string) *Object {
+func getObject(r *http.Request, header string) string {
+    IPAddress := r.Header.Get(header)
+    if IPAddress == "" {
+        IPAddress = r.Header.Get("X-Real-Ip")
+    } 
+    if IPAddress == "" {
+        IPAddress = r.Header.Get("X-Forwarded-For")
+    } 
+    if IPAddress == "" {
+        remAddr := strings.Split(r.RemoteAddr, ":")
+        if len(remAddr) > 0 { IPAddress = remAddr[0] }
+    } 
+    if IPAddress == "" { 
+        IPAddress = "unknown" 
+    }
+    return IPAddress
+}
+
+func (o *Objects) Get(key string) *Object {
+    o.RLock()
+    defer o.RUnlock()
+
+    item, ok := o.items[key]
+    if ok {
+        return item
+    }
+    
+    return &Object{}
+}
+
+func (o *Objects) Set(key, path string, size float64) *Object {
     o.Lock()
     defer o.Unlock()
 
-    tsmp := time.Now().Unix()
-
-    item, ok := o.items[object]
+    item, ok := o.items[key]
     if ok {
-        sec := tsmp - item.Timestamp 
-        if sec > 20 {
-            avg := item.Size/float64(sec)
-            item = &Object{Timestamp: tsmp, Size: 0, Avg: avg, UrlPath: item.UrlPath}
-            if avg == 0 {
-                delete(o.items, object)
-            } else {
-                o.items[object] = item
-            }
+        o.items[key] = &Object{Timestamp: time.Now().Unix(), Arr: append(item.Arr, size), Avg: item.Avg, UrlPath: path}
+    } else {
+        o.items[key] = &Object{Timestamp: time.Now().Unix(), Arr: []float64{size}, Avg: float64(0), UrlPath: path}
+    }
+
+    return o.items[key]
+}
+
+func (o *Objects) Update(key string, updt time.Duration) *Object {
+    o.Lock()
+    defer o.Unlock()
+
+    item, ok := o.items[key]
+    if ok {
+        avg := sumArray(item.Arr)/float64(updt.Seconds())
+        object := &Object{Timestamp: item.Timestamp, Arr: []float64{0}, Avg: avg, UrlPath: item.UrlPath}
+        if avg == 0 && item.Timestamp + 600 < time.Now().Unix() {
+            delete(o.items, key)
+        } else {
+            o.items[key] = object
         }
-        return item
+        return object
     }
 
     return &Object{}
@@ -129,7 +170,7 @@ func (o *Objects) Items() []string {
     o.RLock()
     defer o.RUnlock()
 
-    items := make([]string, len(o.items))
+    items := []string{}
     for key, _ := range o.items {
         items = append(items, key)
     }
@@ -180,16 +221,15 @@ func NewAPI(c *config.HttpClient, u *config.Upstream, d bool) (*API, error) {
     }
 
     go func(api *API){
+        if api.Upstream.UpdateStat == 0 {
+            api.Upstream.UpdateStat = 60 * time.Second
+        }
+
         for {
             items := api.Objects.Items()
-            for _, object := range items {
-                item := api.Objects.Update(object)
-                if item.Timestamp > 0 {
-                    sizeBytesBucket.With(prometheus.Labels{"listen_addr": api.Upstream.ListenAddr, "url_path": item.UrlPath, "object": object}).Set(item.Avg)
-                }
-            }
-            if api.Upstream.UpdateStat == 0 {
-                api.Upstream.UpdateStat = 5 * time.Second
+            for _, key := range items {
+                item := api.Objects.Update(key, api.Upstream.UpdateStat)
+                sizeBytesBucket.With(prometheus.Labels{"listen_addr": api.Upstream.ListenAddr, "url_path": item.UrlPath, "object": key}).Set(item.Avg)
             }
             time.Sleep(api.Upstream.UpdateStat)
         }
@@ -281,7 +321,7 @@ func (api *API) HealthCheck(w http.ResponseWriter, r *http.Request){
 
     for _, urlMap := range api.Upstream.URLMap {
         for _, urlPrefix := range urlMap.URLPrefix {
-            if len(urlPrefix.Health) == 0 && (urlMap.RequestsLimit == 0 || len(urlPrefix.Requests) < urlMap.RequestsLimit) {
+            if len(urlPrefix.Health) == 0 {
                 w.WriteHeader(200)
                 w.Write([]byte("OK"))
                 return
@@ -307,23 +347,24 @@ func (api *API) ReverseProxy(w http.ResponseWriter, r *http.Request) {
     r.Header = header
 
     // Get a limit for an object
-    object := r.Header.Get(api.Upstream.ObjectHeader)
-    if object == "" { object = "unknown" }
+    key := getObject(r, api.Upstream.ObjectHeader)
     size := float64(len(data))
-    item := api.Objects.Set(object, r.URL.Path, size)
-    sizeBytesTotal.With(prometheus.Labels{"listen_addr": api.Upstream.ListenAddr, "url_path": r.URL.Path, "object": object}).Add(size)
-
+    
     // Checking the size limit
     if api.Upstream.SizeLimit > 0 {
-        if item.Avg > float64(api.Upstream.SizeLimit / int64(len(api.Objects.items))) {
-            if api.Debug {
-                log.Printf("[debug] payload too large (%v) - %v", object, r.URL.Path)
+        item := api.Objects.Get(key)
+        if len(api.Objects.items) > 0 {
+            if item.Avg > float64(api.Upstream.SizeLimit / int64(len(api.Objects.items))) {
+                sizeBytesDropped.With(prometheus.Labels{"listen_addr": api.Upstream.ListenAddr, "url_path": r.URL.Path, "object": key}).Add(size)
+        //        requestTotal.With(prometheus.Labels{"listen_addr": api.Upstream.ListenAddr, "user": username, "code": "413"}).Inc()
+        //        w.WriteHeader(429)
+        //        return
             }
-            requestTotal.With(prometheus.Labels{"listen_addr": api.Upstream.ListenAddr, "user": username, "code": "413"}).Inc()
-            w.WriteHeader(429)
-            return
         }
     }
+
+    api.Objects.Set(key, r.URL.Path, size)
+    sizeBytesTotal.With(prometheus.Labels{"listen_addr": api.Upstream.ListenAddr, "url_path": r.URL.Path, "object": "all"}).Add(size)
 
     // Path matching check
     for _, mapPath := range api.Upstream.MapPaths {
@@ -350,6 +391,17 @@ func (api *API) ReverseProxy(w http.ResponseWriter, r *http.Request) {
             }
 
             if urlPrefix := getPrefixURL(api.Upstream.URLMap[mapPath.Index].URLPrefix); urlPrefix != nil {
+
+                if api.Upstream.URLMap[mapPath.Index].RequestsLimit > 0 && len(urlPrefix.Requests) > api.Upstream.URLMap[mapPath.Index].RequestsLimit {
+                    requestTotal.With(prometheus.Labels{"listen_addr": api.Upstream.ListenAddr, "user": username, "code": strconv.Itoa(413)}).Inc()
+                    
+                    if api.Upstream.URLMap[mapPath.Index].ErrorCode != 0 {
+                        w.WriteHeader(api.Upstream.URLMap[mapPath.Index].ErrorCode)
+                        return
+                    }
+                    w.WriteHeader(413)
+                    return
+                }
 
                 if len(urlPrefix.Requests) < 1000000 {
                     urlPrefix.Requests <- 1
@@ -483,6 +535,7 @@ func main() {
     go func(){
         prometheus.MustRegister(requestTotal)
         prometheus.MustRegister(sizeBytesTotal)
+        prometheus.MustRegister(sizeBytesDropped)
         prometheus.MustRegister(sizeBytesBucket)
         prometheus.MustRegister(healthCheckFailed)
         prometheus.MustRegister(upstreamRequests)
