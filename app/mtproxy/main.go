@@ -137,11 +137,13 @@ func (o *Objects) Set(key, path string, size float64) *Object {
     o.Lock()
     defer o.Unlock()
 
-    item, ok := o.items[key]
-    if ok {
-        o.items[key] = &Object{Timestamp: time.Now().Unix(), Arr: append(item.Arr, size), Avg: item.Avg, UrlPath: path}
-    } else {
-        o.items[key] = &Object{Timestamp: time.Now().Unix(), Arr: []float64{size}, Avg: float64(0), UrlPath: path}
+    for _, k := range []string{key, "all"}{
+        item, ok := o.items[k]
+        if ok {
+            o.items[k] = &Object{Timestamp: time.Now().Unix(), Arr: append(item.Arr, size), Avg: item.Avg, UrlPath: path}
+        } else {
+            o.items[k] = &Object{Timestamp: time.Now().Unix(), Arr: []float64{size}, Avg: float64(0), UrlPath: path}
+        }
     }
 
     return o.items[key]
@@ -352,13 +354,19 @@ func (api *API) ReverseProxy(w http.ResponseWriter, r *http.Request) {
     
     // Checking the size limit
     if api.Upstream.SizeLimit > 0 {
-        item := api.Objects.Get(key)
-        if len(api.Objects.items) > 0 {
-            if item.Avg > float64(api.Upstream.SizeLimit / int64(len(api.Objects.items))) {
+        all := api.Objects.Get("all")
+        if all.Avg > api.Upstream.SizeLimit {
+            item := api.Objects.Get(key)
+            count := float64(len(api.Objects.items) - 1)
+            if count > 0 && item.Avg > api.Upstream.SizeLimit / count {
                 sizeBytesDropped.With(prometheus.Labels{"listen_addr": api.Upstream.ListenAddr, "url_path": r.URL.Path, "object": key}).Add(size)
-        //        requestTotal.With(prometheus.Labels{"listen_addr": api.Upstream.ListenAddr, "user": username, "code": "413"}).Inc()
-        //        w.WriteHeader(429)
-        //        return
+                requestTotal.With(prometheus.Labels{"listen_addr": api.Upstream.ListenAddr, "user": username, "code": "413"}).Inc()
+                if api.Upstream.ErrorCode != 0 {
+                    w.WriteHeader(api.Upstream.ErrorCode)
+                    return
+                }
+                w.WriteHeader(413)
+                return
             }
         }
     }
@@ -393,13 +401,13 @@ func (api *API) ReverseProxy(w http.ResponseWriter, r *http.Request) {
             if urlPrefix := getPrefixURL(api.Upstream.URLMap[mapPath.Index].URLPrefix); urlPrefix != nil {
 
                 if api.Upstream.URLMap[mapPath.Index].RequestsLimit > 0 && len(urlPrefix.Requests) > api.Upstream.URLMap[mapPath.Index].RequestsLimit {
-                    requestTotal.With(prometheus.Labels{"listen_addr": api.Upstream.ListenAddr, "user": username, "code": strconv.Itoa(413)}).Inc()
+                    requestTotal.With(prometheus.Labels{"listen_addr": api.Upstream.ListenAddr, "user": username, "code": strconv.Itoa(429)}).Inc()
                     
                     if api.Upstream.URLMap[mapPath.Index].ErrorCode != 0 {
                         w.WriteHeader(api.Upstream.URLMap[mapPath.Index].ErrorCode)
                         return
                     }
-                    w.WriteHeader(413)
+                    w.WriteHeader(429)
                     return
                 }
 

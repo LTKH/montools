@@ -44,8 +44,9 @@ type DialContext struct {
 type Upstream struct {
     ListenAddr             string                  `yaml:"listen_addr"`
     ObjectHeader           string                  `yaml:"object_header"`
-    SizeLimit              int64                   `yaml:"size_limit"`
+    SizeLimit              float64                 `yaml:"size_limit"`
     UpdateStat             time.Duration           `yaml:"update_stat"`
+    ErrorCode              int                     `yaml:"error_code"`
     CertFile               string                  `yaml:"cert_file"`
     CertKey                string                  `yaml:"cert_key"`
     URLMap                 []*URLMap               `yaml:"url_map"`
